@@ -70,12 +70,12 @@ export const VideoConverter: React.FC = () => {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
-  const [statusText, setStatusText] = useState('Inițializare FFmpeg...');
+  const [, setStatusText] = useState('Inițializare FFmpeg...');
   const [error, setError] = useState<string | null>(null);
 
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [resultSize, setResultSize] = useState<number | null>(null);
-  const [engineUsed, setEngineUsed] = useState<'ffmpeg' | 'mediarecorder' | null>(null);
+  const [, setEngineUsed] = useState<'ffmpeg' | 'mediarecorder' | null>(null);
 
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
