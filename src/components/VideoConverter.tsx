@@ -27,7 +27,6 @@ export const VideoConverter = () => {
     mkv: { accept: '.mkv', mimeType: 'video/x-matroska', category: 'video' },
   };
 
-  // ✅ FIX DEFINITIV toate TypeScript errors
   const ffmpegDataToBlob = (data: string | Uint8Array, mimeType: string): Blob => {
     if (typeof data === 'string') {
       return new Blob([data], { type: mimeType });
@@ -107,8 +106,6 @@ export const VideoConverter = () => {
         await ffmpegRef.current!.exec(['-i', inputName, outputName]);
         setProgress(90);
       }
-      
-      // ✅ TOATE FIX-urile TypeScript
       const data = await ffmpegRef.current!.readFile(outputName);
       const mime = formats[outputType]?.mimeType || 'video/mp4';
       const blob = ffmpegDataToBlob(data, mime);
@@ -128,65 +125,6 @@ export const VideoConverter = () => {
     }
   };
 
-  const runFullConversionTest = async () => {
-    if (!ffmpegRef.current || !confirm('🧪 Testez 4 conversii video (20s)?')) return;
-
-    console.log('🚀 === TEST VIDEO MATRIX ===');
-    let success = 0;
-
-    try {
-      console.log('🔧 Generez MP4 test...');
-      await ffmpegRef.current!.exec([
-        '-f', 'lavfi', 
-        '-i', 'testsrc=size=320x240:rate=30:duration=2', 
-        '-c:v', 'libx264', 
-        '-pix_fmt', 'yuv420p',
-        '-t', '1',
-        'test.mp4'
-      ]);
-      
-      const mp4Data = await ffmpegRef.current!.readFile('test.mp4');
-      console.log(`✅ MP4 test: ${Math.round(getFileDataSize(mp4Data)/1024)}KB`);
-      
-      const formatsTest = ['mkv', 'avi', 'mov', 'webm'];
-      
-      for (const fmt of formatsTest) {
-        try {
-          console.log(`🧪 Test ${fmt.toUpperCase()}...`);
-          const cmd = fmt === 'webm' ? [
-            '-i', 'test.mp4', 
-            '-c:v', 'libvpx', 
-            '-crf', '10', 
-            '-cpu-used', '5',
-            `test.${fmt}`
-          ] : [
-            '-i', 'test.mp4', 
-            '-c', 'copy', 
-            `test.${fmt}`
-          ];
-          
-          await ffmpegRef.current!.exec(cmd);
-          const data = await ffmpegRef.current!.readFile(`test.${fmt}`);
-          const size = getFileDataSize(data);
-          
-          if (size > 500) {
-            success++;
-            console.log(`✅ ${fmt.toUpperCase()}: ${Math.round(size/1024)}KB`);
-          }
-        } catch (e) {
-          console.log(`❌ ${fmt.toUpperCase()}: FAIL`);
-        }
-      }
-      
-      const rate = Math.round((success / 4) * 100);
-      alert(`🎬 TEST REZULTAT:\n${success}/4 conversii OK\n${rate}%\n\n${rate === 100 ? '🚀 FFmpeg PERFECT!' : '⚠️ Parțial OK'}`);
-      
-    } catch (error) {
-      console.error('❌ Test eroare:', error);
-      alert('❌ Test eșuat! Verifică F12.');
-    }
-  };
-
   const handleInputTypeChange = (e: ChangeEvent<HTMLSelectElement>): void => {
     setInputType(e.target.value);
     setOutputType(e.target.value);
@@ -203,31 +141,6 @@ export const VideoConverter = () => {
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px' }}>
       <h2 style={{ textAlign: 'center', color: '#333', marginBottom: '30px' }}>🎬 Video Converter Pro</h2>
-      
-      {loading && (
-        <div style={{ padding: '20px', background: '#e3f2fd', borderRadius: '12px', marginBottom: '20px', textAlign: 'center', borderLeft: '4px solid #2196f3' }}>
-          <div style={{ width: '24px', height: '24px', border: '3px solid #2196f3', borderTop: '3px solid transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 10px' }} />
-          <strong>Încărc FFmpeg (~30MB)... Așteaptă!</strong>
-        </div>
-      )}
-      
-      {!ffmpegReady && !loading && (
-        <div style={{ padding: '20px', background: '#fff3cd', borderRadius: '12px', marginBottom: '20px', textAlign: 'center', borderLeft: '4px solid #ffc107' }}>
-          ❌ FFmpeg eroare. Reîmprospătează pagina!
-        </div>
-      )}
-
-      <div style={{ 
-        padding: '12px', 
-        background: '#e8f5e8', 
-        borderRadius: '8px', 
-        marginBottom: '20px',
-        fontSize: '14px',
-        color: '#2e7d32'
-      }}>
-        🎬 VIDEO: {inputType.toUpperCase()} → {outputType.toUpperCase()}
-      </div>
-
       <div style={{ marginBottom: '15px' }}>
         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Input:</label>
         <select onChange={handleInputTypeChange} value={inputType} disabled={loading || converting}
@@ -281,26 +194,6 @@ export const VideoConverter = () => {
       >
         {converting ? `🔄 Convertesc... ${progress}%` : '🚀 CONVERT VIDEO'}
       </button>
-
-      <button 
-        onClick={runFullConversionTest} 
-        disabled={converting || loading || !ffmpegReady}
-        style={{ 
-          width: '100%', 
-          padding: '12px', 
-          background: '#ff6b35', 
-          color: 'white', 
-          border: 'none', 
-          borderRadius: '8px', 
-          fontSize: '16px', 
-          fontWeight: 'bold', 
-          cursor: converting || loading || !ffmpegReady ? 'not-allowed' : 'pointer', 
-          marginBottom: '15px' 
-        }}
-      >
-        🧪 TEST 4 CONVERSII (20s)
-      </button>
-      
       {converting && (
         <div style={{ marginBottom: '20px', padding: '20px', background: '#f8f9fa', borderRadius: '12px', borderLeft: '5px solid #28a745' }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: '15px', fontSize: '18px', fontWeight: 'bold' }}>

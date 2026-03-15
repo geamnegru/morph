@@ -29,7 +29,6 @@ const textOutputFormats: TextFormat[] = [
 ];
 
 const converters: Record<string, (input: string, inputType: string, outputType: string) => string> = {
-  // TXT → ANY
   'txt-json': (text) => JSON.stringify({ content: text.trim() }, null, 2),
   'txt-csv': (text) => text.split('\n').filter(l => l.trim()).map(l => `"${l.trim()}"`).join('\n'),
   'txt-yaml': (text) => `content: |\n  ${text.trim().split('\n').join('\n  ')}`,
@@ -38,7 +37,6 @@ const converters: Record<string, (input: string, inputType: string, outputType: 
   'txt-upper': (text) => text.toUpperCase(),
   'txt-base64': (text) => btoa(unescape(encodeURIComponent(text))),
   
-  // JSON → ANY
   'json-yaml': (json) => {
     try {
       const obj = JSON.parse(json);
@@ -52,7 +50,6 @@ const converters: Record<string, (input: string, inputType: string, outputType: 
     } catch { return json; }
   },
   
-  // YAML → ANY (FIXED!)
   'yaml-json': (yaml) => {
     const obj: any = {};
     yaml.split('\n').forEach(line => {
@@ -79,7 +76,6 @@ const converters: Record<string, (input: string, inputType: string, outputType: 
   
   'yaml-txt': (yaml) => yaml.split('\n').filter(l => l.includes(':')).map(l => l.split(':')[1]?.trim() || l).join('\n'),
   
-  // CSV → ANY
   'csv-yaml': (csv) => {
     const lines = csv.split('\n').filter(l => l.trim());
     let yaml = '';
@@ -89,13 +85,11 @@ const converters: Record<string, (input: string, inputType: string, outputType: 
     return yaml;
   },
   
-  // Generic fallback
   '*-txt': (text) => text,
   '*-upper': (text) => text.toUpperCase(),
   '*-base64': (text) => btoa(unescape(encodeURIComponent(text)))
 };
 
-// 🔥 JSON → YAML recursive
 function jsonToYaml(obj: any, indent = 0): string {
   const spaces = '  '.repeat(indent);
   let yaml = '';
@@ -149,11 +143,9 @@ export const TextConverter = () => {
       
       let converted = text;
       
-      // Try exact converter
       if (converters[converterKey]) {
         converted = converters[converterKey](text, inputType.id, outputType.id);
       } 
-      // Try generic fallbacks
       else if (converters[`*-${outputType.id}` as keyof typeof converters]) {
         converted = (converters[`*-${outputType.id}` as keyof typeof converters] as any)(text, inputType.id, outputType.id);
       }
@@ -172,73 +164,6 @@ export const TextConverter = () => {
     } finally {
       setConverting(false);
     }
-  };
-
-  const runTextConversionTest = async () => {
-    if (!confirm('🧪 Testez 12 conversii TEXT (3s)?')) return;
-
-    console.log('🚀 === TEXT CONVERSION MATRIX ===');
-    let success = 0;
-
-    const testInputs = {
-      txt: `Line 1
-Line 2
-Focșani, Vrancea
-1df36-1b084`,
-      json: `{
-  "name": "John",
-  "city": "Focșani",
-  "codes": ["1df36-1b084", "d76ea-38584"]
-}`,
-      yaml: `content: 1df36-1b084
-d76ea-38584
-f3c8d-5e6cd`
-    };
-
-    const testCases = [
-      // TXT tests
-      { in: 'txt', out: 'json', expected: /content/ },
-      { in: 'txt', out: 'yaml', expected: /content:/ },
-      { in: 'txt', out: 'csv', expected: /"Line 1"/ },
-      
-      // JSON tests
-      { in: 'json', out: 'yaml', expected: /name:\s*John/ },
-      { in: 'json', out: 'txt', expected: /Focșani/ },
-      
-      // YAML tests ✅ FIXED
-      { in: 'yaml', out: 'json', expected: /"content"/ },
-      { in: 'yaml', out: 'csv', expected: /1df36-1b084/ },
-      
-      // Bonus tests
-      { in: 'txt', out: 'html', expected: /<pre/ },
-      { in: 'txt', out: 'log', expected: /\[\d{4}-\d{2}/ },
-      { in: 'txt', out: 'upper', expected: /FOCȘANI/ },
-      { in: 'yaml', out: 'txt', expected: /1df36/ }
-    ];
-
-    for (const test of testCases) {
-      try {
-        const input = testInputs[test.in as keyof typeof testInputs];
-        const converterKey = getConverterKey(test.in, test.out);
-        let converted = input;
-        
-        if (converters[converterKey]) {
-          converted = converters[converterKey](input, test.in, test.out);
-        }
-        
-        if (test.expected.test(converted) && converted.length > 10) {
-          success++;
-          console.log(`✅ ${test.in.toUpperCase()}→${test.out.toUpperCase()}`);
-        } else {
-          console.log(`⚠️ ${test.in.toUpperCase()}→${test.out.toUpperCase()}: partial`);
-        }
-      } catch (e) {
-        console.log(`❌ ${test.in.toUpperCase()}→${test.out.toUpperCase()}: error`);
-      }
-    }
-
-    const rate = Math.round((success / testCases.length) * 100);
-    alert(`📄 TEST REZULTAT:\n${success}/12 conversii OK\n${rate}%\n\n${rate === 100 ? '🚀 TEXT CONVERTER PERFECT!' : '⚠️ Parțial OK'}`);
   };
 
   const handleInputTypeChange = (e: ChangeEvent<HTMLSelectElement>) => {
@@ -276,20 +201,6 @@ f3c8d-5e6cd`
 
   return (
     <div style={{ maxWidth: '700px', margin: '0 auto', padding: '20px' }}>
-      <h2 style={{ textAlign: 'center', color: '#333', marginBottom: '30px' }}>
-        📄 Text Converter Pro
-      </h2>
-      
-      {/* STATUS BAR */}
-      <div style={{ 
-        padding: '12px', background: '#e8f5e8', 
-        borderRadius: '8px', marginBottom: '20px',
-        fontSize: '16px', color: '#2e7d32', textAlign: 'center', fontWeight: 'bold'
-      }}>
-        📥 {inputType.name.toUpperCase()}.{inputType.ext} → 📤 {outputType.name.toUpperCase()}.{outputType.ext}
-      </div>
-
-      {/* INPUT TYPE */}
       <div style={{ marginBottom: '15px' }}>
         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
           Input Format:
@@ -310,8 +221,6 @@ f3c8d-5e6cd`
           ))}
         </select>
       </div>
-
-      {/* OUTPUT TYPE */}
       <div style={{ marginBottom: '15px' }}>
         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
           Output Format:
@@ -332,8 +241,6 @@ f3c8d-5e6cd`
           ))}
         </select>
       </div>
-
-      {/* FILE INPUT */}
       <input 
         id="textFile"
         type="file" 
@@ -347,7 +254,6 @@ f3c8d-5e6cd`
         }} 
       />
       
-      {/* CONVERT BUTTON */}
       <button 
         onClick={convertText} 
         disabled={converting}
@@ -362,24 +268,6 @@ f3c8d-5e6cd`
       >
         {converting ? `🔄 Convertesc...` : '🚀 CONVERT TEXT'}
       </button>
-
-      {/* TEST BUTTON */}
-      <button 
-        onClick={runTextConversionTest} 
-        disabled={converting}
-        style={{ 
-          width: '100%', padding: '12px', 
-          background: '#ff6b35', color: 'white', 
-          border: 'none', borderRadius: '8px', 
-          fontSize: '16px', fontWeight: 'bold', 
-          cursor: converting ? 'not-allowed' : 'pointer', 
-          marginBottom: '20px'
-        }}
-      >
-        🧪 TEST 12 CONVERSII (3s)
-      </button>
-      
-      {/* PREVIEW */}
       {preview && (
         <div style={{ 
           background: '#f8f9fa', padding: '20px', 
@@ -396,8 +284,6 @@ f3c8d-5e6cd`
           </pre>
         </div>
       )}
-
-      {/* RESULT */}
       {result && (
         <div style={{ 
           padding: '25px', background: '#d4edda', 
