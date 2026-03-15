@@ -1,32 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
-interface TextFormat {
-  id: string;
-  name: string;
-  ext: string;
-  accept: string;
-  mime: string;
-}
-
-const textInputFormats: TextFormat[] = [
-  { id: 'txt', name: 'TXT', ext: 'txt', accept: '.txt', mime: 'text/plain' },
-  { id: 'json', name: 'JSON', ext: 'json', accept: '.json', mime: 'application/json' },
-  { id: 'yaml', name: 'YAML', ext: 'yml', accept: '.yaml,.yml', mime: 'text/yaml' },
-  { id: 'log', name: 'LOG', ext: 'log', accept: '.log', mime: 'text/plain' },
-  { id: 'md', name: 'Markdown', ext: 'md', accept: '.md', mime: 'text/markdown' }
-];
-
-const textOutputFormats: TextFormat[] = [
-  { id: 'txt', name: 'TXT', ext: 'txt', accept: '.txt', mime: 'text/plain' },
-  { id: 'json', name: 'JSON', ext: 'json', accept: '.json', mime: 'application/json' },
-  { id: 'yaml', name: 'YAML', ext: 'yml', accept: '.yml', mime: 'text/yaml' },
-  { id: 'csv', name: 'CSV', ext: 'csv', accept: '.csv', mime: 'text/csv' },
-  { id: 'html', name: 'HTML', ext: 'html', accept: '.html', mime: 'text/html' },
-  { id: 'log', name: 'LOG', ext: 'log', accept: '.log', mime: 'text/plain' },
-  { id: 'md', name: 'MD', ext: 'md', accept: '.md', mime: 'text/markdown' },
-  { id: 'base64', name: 'Base64', ext: 'b64', accept: '.b64', mime: 'text/plain' },
-  { id: 'upper', name: 'UPPER', ext: 'txt', accept: '.txt', mime: 'text/plain' }
-];
+import type { TextFormat } from '../types';
+import { textInputFormats, textOutputFormats } from '../constants';
 
 const converters: Record<string, (input: string, inputType: string, outputType: string) => string> = {
   'txt-json': (text) => JSON.stringify({ content: text.trim() }, null, 2),
@@ -62,7 +37,7 @@ const converters: Record<string, (input: string, inputType: string, outputType: 
     return JSON.stringify(obj, null, 2);
   },
   
-  'yaml-csv': (yaml) => {  // ✅ FIXED
+  'yaml-csv': (yaml) => {
     return yaml.split('\n')
       .filter(l => l.trim() && !l.startsWith('#'))
       .map(l => {

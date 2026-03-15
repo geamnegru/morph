@@ -1,28 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ChangeEvent } from 'react';
 import { encode } from '@jsquash/avif';
+import type { ImageFormat } from '../types';
+import { imageInputFormats, imageOutputFormats } from '../constants';
 
-interface ImageFormat {
-  id: string;
-  name: string;
-  ext: string;
-  accept: string;
-  mime: string;
-}
-
-const imageInputFormats: ImageFormat[] = [
-  { id: 'png', name: 'PNG', ext: 'png', accept: '.png', mime: 'image/png' },
-  { id: 'jpg', name: 'JPG', ext: 'jpg', accept: '.jpg,.jpeg', mime: 'image/jpeg' },
-  { id: 'webp', name: 'WEBP', ext: 'webp', accept: '.webp', mime: 'image/webp' },
-  { id: 'avif', name: 'AVIF', ext: 'avif', accept: '.avif', mime: 'image/avif' }
-];
-
-const imageOutputFormats: ImageFormat[] = [
-  { id: 'png', name: 'PNG', ext: 'png', accept: '.png', mime: 'image/png' },
-  { id: 'jpg', name: 'JPG', ext: 'jpg', accept: '.jpg', mime: 'image/jpeg' },
-  { id: 'webp', name: 'WEBP', ext: 'webp', accept: '.webp', mime: 'image/webp' },
-  { id: 'avif', name: 'AVIF', ext: 'avif', accept: '.avif', mime: 'image/avif' }
-];
 
 export const ImageConverter = () => {
   const [result, setResult] = useState<string | null>(null);
@@ -147,8 +128,6 @@ export const ImageConverter = () => {
                     quality: 85,
                     speed: 6
                   });
-                  
-                  // ArrayBuffer → base64
                   const uint8Array = new Uint8Array(avifBuffer as ArrayBuffer);
                   let binary = '';
                   for (let i = 0; i < uint8Array.byteLength; i++) {
