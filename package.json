@@ -14,8 +14,15 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@jsquash/avif": "^2.1.1",
+    "@wetheredge/libavjs-webcodecs-polyfill": "^0.4.0",
+    "libav.js": "^6.8.8",
+    "libavjs-webcodecs-bridge": "^0.3.2",
+    "libavjs-webcodecs-polyfill": "^0.5.5",
+    "mediabunny": "^1.39.2",
+    "mp4box": "^2.3.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "webm-muxer": "^5.1.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

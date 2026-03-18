@@ -34,3 +34,19 @@ export interface ImageFormat {
   accept: string;
   mime: string;
 }
+
+export interface VideoTrackInfo {
+  id: number;
+  width: number;
+  height: number;
+  timescale: number;
+  codec: string;
+  nb_samples: number;
+};
+
+export interface Sample {
+  is_sync: boolean;
+  cts: number;
+  duration: number;
+  data: Uint8Array;
+};
