@@ -649,7 +649,7 @@ async function muxWebMFromEncodedChunks(args: {
 
 async function canUseWebCodecsForMp4ToWebm(file: File): Promise<boolean> {
   try {
-    const { videoTrack, audioTrack, videoSamples, audioSamples } = await demuxMp4(file);
+    const { videoTrack, videoSamples } = await demuxMp4(file);
 
     if (!videoTrack) {
       console.warn('[WebCodecs gate] Nu există track video');
