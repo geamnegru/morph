@@ -50,3 +50,56 @@ export interface Sample {
   duration: number;
   data: Uint8Array;
 };
+
+export type DemuxedAudioSample = {
+  timestampUs: number;
+  durationUs: number;
+  data: Uint8Array;
+};
+
+export type AudioTrack = {
+  id: number;
+  codec: string;
+  sampleRate: number;
+  numberOfChannels: number;
+  timescale: number;
+  description?: Uint8Array;
+};
+
+export type EncodedAudioChunkRecord = {
+  data: Uint8Array;
+  timestamp: number;
+  duration?: number;
+  type: EncodedAudioChunkType;
+};
+
+export type DemuxedSample = {
+  isSync: boolean;
+  timestampUs: number;
+  durationUs: number;
+  data: Uint8Array;
+};
+
+export type VideoTrack = {
+  id: number;
+  codec: string;
+  width: number;
+  height: number;
+  timescale: number;
+  description?: Uint8Array;
+};
+
+export type EncodedChunkRecord = {
+  data: Uint8Array;
+  timestamp: number;
+  duration?: number;
+  type: EncodedVideoChunkType;
+};
+
+export type WebCodecsRuntime = {
+  VideoEncoderCtor: typeof VideoEncoder;
+  VideoDecoderCtor: typeof VideoDecoder;
+  EncodedVideoChunkCtor: typeof EncodedVideoChunk;
+  mode: 'native';
+  hardwareAcceleration: HardwareAcceleration;
+};

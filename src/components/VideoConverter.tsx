@@ -3,38 +3,17 @@ import { Muxer, ArrayBufferTarget } from 'webm-muxer';
 import * as MP4Box from 'mp4box';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
-import type { VideoFormat, HTMLVideoElementWithCapture } from '../types';
+import type {
+  VideoFormat,
+  HTMLVideoElementWithCapture,
+  DemuxedAudioSample,
+  AudioTrack,
+  DemuxedSample,
+  VideoTrack,
+  WebCodecsRuntime,
+  EncodedChunkRecord,
+} from '../types';
 import { FORMATS, WEBM_MIME_CANDIDATES, COPY_COMPATIBLE_FORMATS } from '../constants';
-
-type DemuxedSample = {
-  isSync: boolean;
-  timestampUs: number;
-  durationUs: number;
-  data: Uint8Array;
-};
-
-type VideoTrack = {
-  id: number;
-  codec: string;
-  width: number;
-  height: number;
-  timescale: number;
-  description?: Uint8Array;
-};
-
-type EncodedChunkRecord = {
-  data: Uint8Array;
-  timestamp: number;
-  duration?: number | undefined;
-  type: EncodedVideoChunkType;
-};
-
-type WebCodecsRuntime = {
-  VideoEncoderCtor: typeof VideoEncoder;
-  VideoDecoderCtor: typeof VideoDecoder;
-  EncodedVideoChunkCtor: typeof EncodedVideoChunk;
-  mode: 'native';
-};
 
 async function getWebCodecsRuntime(args: {
   width: number;
@@ -60,41 +39,53 @@ async function getWebCodecsRuntime(args: {
     throw new Error('WebCodecs native nu este disponibil în acest browser.');
   }
 
-  try {
-    const support = await VideoEncoder.isConfigSupported({
+  // Încearcă prefer-hardware mai întâi, fallback la no-preference
+  // Firefox nu suportă prefer-hardware pentru VP8
+  let support = await VideoEncoder.isConfigSupported({
+    codec: preferredCodec,
+    width,
+    height,
+    framerate,
+    bitrate,
+    latencyMode: 'realtime',
+    hardwareAcceleration: 'prefer-hardware',
+  });
+
+  if (!support.supported) {
+    support = await VideoEncoder.isConfigSupported({
       codec: preferredCodec,
       width,
       height,
       framerate,
       bitrate,
-      latencyMode: 'quality',
+      latencyMode: 'realtime',
+      hardwareAcceleration: 'no-preference',
     });
-
-    console.log('[WebCodecs native support check]', {
-      codec: preferredCodec,
-      supported: support.supported,
-      width,
-      height,
-      framerate,
-      bitrate,
-    });
-
-    if (!support.supported) {
-      throw new Error(`WebCodecs encoder nu suportă codec-ul ${preferredCodec}.`);
-    }
-
-    return {
-      VideoEncoderCtor: VideoEncoder,
-      VideoDecoderCtor: VideoDecoder,
-      EncodedVideoChunkCtor: EncodedVideoChunk,
-      mode: 'native',
-    };
-  } catch (err) {
-    console.warn('[WebCodecs native support check failed]', err);
-    throw err instanceof Error
-      ? err
-      : new Error('WebCodecs native nu a putut fi inițializat.');
   }
+
+  console.log('[WebCodecs native support check]', {
+    codec: preferredCodec,
+    supported: support.supported,
+    width,
+    height,
+    framerate,
+    bitrate,
+    config: support.config,
+  });
+
+  if (!support.supported) {
+    throw new Error(`WebCodecs encoder nu suportă codec-ul ${preferredCodec}.`);
+  }
+
+  const confirmedHwAccel = support.config?.hardwareAcceleration ?? 'no-preference';
+
+  return {
+    VideoEncoderCtor: VideoEncoder,
+    VideoDecoderCtor: VideoDecoder,
+    EncodedVideoChunkCtor: EncodedVideoChunk,
+    mode: 'native',
+    hardwareAcceleration: confirmedHwAccel,
+  };
 }
 
 async function getVideoMetadata(file: File): Promise<{
@@ -265,10 +256,32 @@ function isVpCodec(codec: string): boolean {
 function isAv1Codec(codec: string): boolean {
   return normalizeMp4Codec(codec).startsWith('av01');
 }
+
 function isDecoderCompatibleMp4Codec(codec: string): boolean {
   return isAvcCodec(codec) || isVpCodec(codec) || isAv1Codec(codec);
 }
-function extractCodecDescriptionFromMp4Box(
+
+function serializeMp4BoxPayload(box: any): Uint8Array | undefined {
+  const DataStreamCtor =
+    (MP4Box as any).DataStream ??
+    (globalThis as any).DataStream;
+
+  if (!DataStreamCtor || !box?.write) {
+    return undefined;
+  }
+
+  const stream = new DataStreamCtor(undefined, 0, DataStreamCtor.BIG_ENDIAN);
+  box.write(stream);
+
+  const fullBox = new Uint8Array(stream.buffer);
+  if (fullBox.byteLength <= 8) {
+    return undefined;
+  }
+
+  return fullBox.slice(8);
+}
+
+function extractVideoCodecDescriptionFromMp4Box(
   mp4boxFile: any,
   trackId: number
 ): Uint8Array | undefined {
@@ -281,33 +294,17 @@ function extractCodecDescriptionFromMp4Box(
       return undefined;
     }
 
-    const DataStreamCtor =
-      (MP4Box as any).DataStream ??
-      (globalThis as any).DataStream;
-
-    if (!DataStreamCtor) {
-      console.warn('[MP4 description] DataStream nu este exportat de mp4box');
-      return undefined;
-    }
-
     for (const entry of entries) {
-      const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
-      if (!box) continue;
-
-      const stream = new DataStreamCtor(undefined, 0, DataStreamCtor.BIG_ENDIAN);
-      box.write(stream);
-
-      const fullBox = new Uint8Array(stream.buffer);
-      if (fullBox.byteLength <= 8) {
-        console.warn('[MP4 description] box serializat prea mic');
-        return undefined;
+      const videoBox = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
+      if (videoBox) {
+        const payload = serializeMp4BoxPayload(videoBox);
+        if (payload?.byteLength) {
+          return payload;
+        }
       }
-
-      // Sărim peste header-ul MP4 box: 4 bytes size + 4 bytes type
-      return fullBox.slice(8);
     }
 
-    console.warn('[MP4 description] Nu am găsit avcC/hvcC/vpcC/av1C în sample entry');
+    console.warn('[MP4 description] Nu am găsit config box video compatibil în sample entry');
     return undefined;
   } catch (err) {
     console.warn('[MP4 description] extragerea a eșuat', err);
@@ -315,54 +312,278 @@ function extractCodecDescriptionFromMp4Box(
   }
 }
 
-async function demuxMp4Video(file: File): Promise<{
-  track: VideoTrack;
-  samples: DemuxedSample[];
+function formatUint8Head(data?: Uint8Array, count = 16): number[] | null {
+  if (!data?.byteLength) return null;
+  return Array.from(data.slice(0, count));
+}
+
+// Dimensiunea unui chunk de fișier citit la un moment dat — 16MB
+// Suficient pentru a menține pipeline-ul ocupat fără a exploda RAM-ul
+const DEMUX_CHUNK_BYTES = 16 * 1024 * 1024;
+
+// demuxMp4Streaming: citește fișierul în bucăți de DEMUX_CHUNK_BYTES
+// și apelează onVideoSamples / onAudioSamples pe măsură ce vin sample-urile.
+// Nu acumulează toate sample-urile în memorie — le consumă pe loc.
+async function demuxMp4Streaming(
+  file: File,
+  callbacks: {
+    onReady: (videoTrack: VideoTrack, audioTrack: AudioTrack | null) => void;
+    onVideoSamples: (samples: DemuxedSample[]) => Promise<void>;
+    onAudioSamples?: (samples: DemuxedAudioSample[]) => void;
+    onError: (err: unknown) => void;
+  }
+): Promise<void> {
+  type MP4BoxArrayBuffer = ArrayBuffer & { fileStart: number };
+
+  const mp4boxFile = MP4Box.createFile();
+
+  let videoTrack: VideoTrack | null = null;
+  let audioTrack: AudioTrack | null = null;
+  let readyResolveFn: (() => void) | null = null;
+  let readyRejectFn: ((e: unknown) => void) | null = null;
+  let processingError: unknown = null;
+
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    readyResolveFn = resolve;
+    readyRejectFn = reject;
+  });
+
+  mp4boxFile.onError = (e: unknown) => {
+    processingError = e;
+    callbacks.onError(e);
+    readyRejectFn?.(e);
+  };
+
+  mp4boxFile.onReady = (info: any) => {
+    const rawVideoTrack = info.videoTracks?.[0] ?? null;
+    const rawAudioTrack = info.audioTracks?.[0] ?? null;
+
+    if (!rawVideoTrack) {
+      const err = new Error('MP4-ul nu conține track video.');
+      processingError = err;
+      callbacks.onError(err);
+      readyRejectFn?.(err);
+      return;
+    }
+
+    videoTrack = {
+      id: rawVideoTrack.id,
+      codec: normalizeMp4Codec(rawVideoTrack.codec),
+      width: rawVideoTrack.video.width,
+      height: rawVideoTrack.video.height,
+      timescale: rawVideoTrack.timescale,
+      description: extractVideoCodecDescriptionFromMp4Box(mp4boxFile, rawVideoTrack.id),
+    };
+
+    if (rawAudioTrack) {
+      audioTrack = {
+        id: rawAudioTrack.id,
+        codec: normalizeMp4Codec(rawAudioTrack.codec),
+        sampleRate: rawAudioTrack.audio.sample_rate,
+        numberOfChannels: rawAudioTrack.audio.channel_count,
+        timescale: rawAudioTrack.timescale,
+        description: undefined,
+      };
+    }
+
+    console.log('[MP4 demux ready]', {
+      videoTrack: {
+        id: videoTrack.id,
+        codec: videoTrack.codec,
+        width: videoTrack.width,
+        height: videoTrack.height,
+        timescale: videoTrack.timescale,
+        descriptionLength: videoTrack.description?.byteLength ?? 0,
+        descriptionHead: formatUint8Head(videoTrack.description),
+      },
+      audioTrack: audioTrack ? {
+        id: audioTrack.id,
+        codec: audioTrack.codec,
+        sampleRate: audioTrack.sampleRate,
+        numberOfChannels: audioTrack.numberOfChannels,
+        timescale: audioTrack.timescale,
+      } : null,
+    });
+
+    // Extragem sample-urile în batch-uri de 256 — suficient pentru pipeline
+    // fără să acumulăm totul în memorie
+    mp4boxFile.setExtractionOptions(rawVideoTrack.id, undefined, { nbSamples: 256 });
+    if (rawAudioTrack) {
+      mp4boxFile.setExtractionOptions(rawAudioTrack.id, undefined, { nbSamples: 256 });
+    }
+
+    callbacks.onReady(videoTrack, audioTrack);
+    mp4boxFile.start();
+    readyResolveFn?.();
+  };
+
+  // onSamples e apelat asincron de MP4Box pe măsură ce parsează chunk-urile
+  // Folosim o coadă de promises pentru a procesa sample-urile în ordine
+  // fără a acumula toate în memorie
+  const sampleQueue: Promise<void>[] = [];
+
+  mp4boxFile.onSamples = (trackId: number, _user: unknown, mp4Samples: any[]) => {
+    if (processingError) return;
+
+    if (videoTrack && trackId === videoTrack.id) {
+      const videoSamples: DemuxedSample[] = mp4Samples.map((s) => ({
+        isSync: !!s.is_sync,
+        timestampUs: Math.round((s.cts / s.timescale) * 1_000_000),
+        durationUs: Math.round((s.duration / s.timescale) * 1_000_000),
+        data: new Uint8Array(s.data),
+      }));
+
+      // Eliberăm sample-urile din MP4Box imediat după copiere
+      mp4boxFile.releaseUsedSamples(trackId, mp4Samples[mp4Samples.length - 1].number);
+
+      const p = callbacks.onVideoSamples(videoSamples).catch((err) => {
+        processingError = err;
+        callbacks.onError(err);
+      });
+      sampleQueue.push(p);
+    }
+
+    if (audioTrack && trackId === audioTrack.id && callbacks.onAudioSamples) {
+      const audioSamples: DemuxedAudioSample[] = mp4Samples.map((s) => ({
+        timestampUs: Math.round((s.cts / s.timescale) * 1_000_000),
+        durationUs: Math.round((s.duration / s.timescale) * 1_000_000),
+        data: new Uint8Array(s.data),
+      }));
+
+      mp4boxFile.releaseUsedSamples(trackId, mp4Samples[mp4Samples.length - 1].number);
+      callbacks.onAudioSamples(audioSamples);
+    }
+  };
+
+  // Citim fișierul în chunk-uri de DEMUX_CHUNK_BYTES
+  let offset = 0;
+  await readyPromise;
+
+  while (offset < file.size) {
+    if (processingError) throw processingError;
+
+    const end = Math.min(offset + DEMUX_CHUNK_BYTES, file.size);
+    const slice = file.slice(offset, end);
+    const arrayBuffer = await slice.arrayBuffer() as MP4BoxArrayBuffer;
+    arrayBuffer.fileStart = offset;
+
+    mp4boxFile.appendBuffer(arrayBuffer);
+    offset = end;
+
+    // Yield după fiecare chunk ca să lăsăm onSamples să fie apelat
+    await yieldToEventLoop();
+  }
+
+  mp4boxFile.flush();
+
+  // Așteptăm toate sample-urile să fie procesate
+  await Promise.all(sampleQueue);
+
+  if (processingError) throw processingError;
+}
+
+// demuxMp4: versiune compatibilă cu codul existent — folosită doar pentru
+// gate check (canUseWebCodecsForMp4ToWebm) unde avem nevoie de primele sample-uri
+async function demuxMp4(file: File): Promise<{
+  videoTrack: VideoTrack | null;
+  audioTrack: AudioTrack | null;
+  videoSamples: DemuxedSample[];
+  audioSamples: DemuxedAudioSample[];
 }> {
   type MP4BoxArrayBuffer = ArrayBuffer & { fileStart: number };
 
-  const fileBuffer = await file.arrayBuffer();
+  // Pentru gate check citim doar primul chunk — suficient pentru metadata + primele sample-uri
+  const firstChunk = file.slice(0, Math.min(DEMUX_CHUNK_BYTES, file.size));
+  const fileBuffer = await firstChunk.arrayBuffer();
   const mp4boxFile = MP4Box.createFile();
 
-  const samples: DemuxedSample[] = [];
-  let track: VideoTrack | null = null;
-  let extractionStarted = false;
+  const videoSamples: DemuxedSample[] = [];
+  const audioSamples: DemuxedAudioSample[] = [];
+
+  let videoTrack: VideoTrack | null = null;
+  let audioTrack: AudioTrack | null = null;
 
   const readyPromise = new Promise<void>((resolve, reject) => {
     mp4boxFile.onError = (e: unknown) => reject(e);
 
     mp4boxFile.onReady = (info: any) => {
-      const videoTrack = info.videoTracks?.[0];
+      const rawVideoTrack = info.videoTracks?.[0] ?? null;
+      const rawAudioTrack = info.audioTracks?.[0] ?? null;
+
+      if (rawVideoTrack) {
+        videoTrack = {
+          id: rawVideoTrack.id,
+          codec: normalizeMp4Codec(rawVideoTrack.codec),
+          width: rawVideoTrack.video.width,
+          height: rawVideoTrack.video.height,
+          timescale: rawVideoTrack.timescale,
+          description: extractVideoCodecDescriptionFromMp4Box(mp4boxFile, rawVideoTrack.id),
+        };
+
+        mp4boxFile.setExtractionOptions(rawVideoTrack.id, undefined, { nbSamples: 32 });
+      }
+
+      if (rawAudioTrack) {
+        audioTrack = {
+          id: rawAudioTrack.id,
+          codec: normalizeMp4Codec(rawAudioTrack.codec),
+          sampleRate: rawAudioTrack.audio.sample_rate,
+          numberOfChannels: rawAudioTrack.audio.channel_count,
+          timescale: rawAudioTrack.timescale,
+          description: undefined,
+        };
+
+        mp4boxFile.setExtractionOptions(rawAudioTrack.id, undefined, { nbSamples: 32 });
+      }
+
       if (!videoTrack) {
         reject(new Error('MP4-ul nu conține track video.'));
         return;
       }
-      const description = extractCodecDescriptionFromMp4Box(mp4boxFile, videoTrack.id);
-      track = {
-        id: videoTrack.id,
-        codec: normalizeMp4Codec(videoTrack.codec),
-        width: videoTrack.video.width,
-        height: videoTrack.video.height,
-        timescale: videoTrack.timescale,
-        description
-      };
 
-      mp4boxFile.setExtractionOptions(videoTrack.id, undefined, { nbSamples: 1 });
+      console.log('[MP4 demux ready]', {
+        videoTrack: videoTrack ? {
+          id: videoTrack.id,
+          codec: videoTrack.codec,
+          width: videoTrack.width,
+          height: videoTrack.height,
+          timescale: videoTrack.timescale,
+          descriptionLength: videoTrack.description?.byteLength ?? 0,
+          descriptionHead: formatUint8Head(videoTrack.description),
+        } : null,
+        audioTrack: audioTrack ? {
+          id: audioTrack.id,
+          codec: audioTrack.codec,
+          sampleRate: audioTrack.sampleRate,
+          numberOfChannels: audioTrack.numberOfChannels,
+          timescale: audioTrack.timescale,
+        } : null,
+      });
+
       mp4boxFile.start();
-      extractionStarted = true;
       resolve();
     };
 
     mp4boxFile.onSamples = (trackId: number, _user: unknown, mp4Samples: any[]) => {
-      if (!track || trackId !== track.id) return;
+      if (videoTrack && trackId === videoTrack.id) {
+        for (const s of mp4Samples) {
+          videoSamples.push({
+            isSync: !!s.is_sync,
+            timestampUs: Math.round((s.cts / s.timescale) * 1_000_000),
+            durationUs: Math.round((s.duration / s.timescale) * 1_000_000),
+            data: new Uint8Array(s.data),
+          });
+        }
+      }
 
-      for (const s of mp4Samples) {
-        samples.push({
-          isSync: !!s.is_sync,
-          timestampUs: Math.round((s.cts / s.timescale) * 1_000_000),
-          durationUs: Math.round((s.duration / s.timescale) * 1_000_000),
-          data: new Uint8Array(s.data),
-        });
+      if (audioTrack && trackId === audioTrack.id) {
+        for (const s of mp4Samples) {
+          audioSamples.push({
+            timestampUs: Math.round((s.cts / s.timescale) * 1_000_000),
+            durationUs: Math.round((s.duration / s.timescale) * 1_000_000),
+            data: new Uint8Array(s.data),
+          });
+        }
       }
     };
   });
@@ -373,39 +594,28 @@ async function demuxMp4Video(file: File): Promise<{
   mp4boxFile.flush();
 
   await readyPromise;
-
-  if (!track) {
-    throw new Error('Nu am putut detecta track-ul video.');
-  }
-
-  if (!extractionStarted) {
-    throw new Error('Extragerea sample-urilor MP4 nu a pornit.');
-  }
-
   await new Promise((r) => setTimeout(r, 0));
 
-  if (samples.length === 0) {
-    throw new Error('Nu am extras sample-uri video din MP4.');
-  }
-
-  return { track, samples };
+  return { videoTrack, audioTrack, videoSamples, audioSamples };
 }
 
-/**
- * În forma actuală, muxerul WebM nu e implementat.
- * Până nu îl legi, WebCodecs trebuie să stea pe fallback.
- */
 async function muxWebMFromEncodedChunks(args: {
-  chunks: EncodedChunkRecord[];
+  videoChunks: EncodedChunkRecord[];
   width: number;
   height: number;
   codec: 'vp8' | 'vp09.00.10.08';
   framerate?: number;
 }): Promise<Blob> {
-  const { chunks, width, height, codec, framerate = 30 } = args;
+  const {
+    videoChunks,
+    width,
+    height,
+    codec,
+    framerate = 30,
+  } = args;
 
-  if (!chunks.length) {
-    throw new Error('Nu există chunk-uri encodate pentru mux WebM.');
+  if (!videoChunks.length) {
+    throw new Error('Nu există chunk-uri video encodate pentru mux WebM.');
   }
 
   const muxer = new Muxer({
@@ -420,7 +630,7 @@ async function muxWebMFromEncodedChunks(args: {
     firstTimestampBehavior: 'offset',
   });
 
-  for (const chunkRecord of chunks) {
+  for (const chunkRecord of videoChunks) {
     const chunk = new EncodedVideoChunk({
       type: chunkRecord.type,
       timestamp: chunkRecord.timestamp,
@@ -439,24 +649,29 @@ async function muxWebMFromEncodedChunks(args: {
 
 async function canUseWebCodecsForMp4ToWebm(file: File): Promise<boolean> {
   try {
-    const { track, samples } = await demuxMp4Video(file);
+    const { videoTrack, audioTrack, videoSamples, audioSamples } = await demuxMp4(file);
 
-    if (!samples.length) {
-      console.warn('[WebCodecs gate] Nu există sample-uri');
+    if (!videoTrack) {
+      console.warn('[WebCodecs gate] Nu există track video');
       return false;
     }
 
-    if (!samples[0].isSync) {
-      console.warn('[WebCodecs gate] Primul sample nu este keyframe');
+    if (!videoSamples.length) {
+      console.warn('[WebCodecs gate] Nu există sample-uri video');
       return false;
     }
 
-    if (!isDecoderCompatibleMp4Codec(track.codec)) {
-      console.warn('[WebCodecs gate] Codec MP4 neacoperit pentru decoder path:', track.codec);
+    if (!videoSamples[0].isSync) {
+      console.warn('[WebCodecs gate] Primul sample video nu este keyframe');
       return false;
     }
 
-    if (isAvcCodec(track.codec) && !track.description?.byteLength) {
+    if (!isDecoderCompatibleMp4Codec(videoTrack.codec)) {
+      console.warn('[WebCodecs gate] Codec video MP4 neacoperit pentru decoder path:', videoTrack.codec);
+      return false;
+    }
+
+    if (isAvcCodec(videoTrack.codec) && !videoTrack.description?.byteLength) {
       console.warn('[WebCodecs gate] AVC/H.264 fără description extras din MP4 -> fallback');
       return false;
     }
@@ -468,6 +683,127 @@ async function canUseWebCodecsForMp4ToWebm(file: File): Promise<boolean> {
   }
 }
 
+// MessageChannel yield — mult mai rapid decât setTimeout(fn, 0/1)
+// Cedează controlul browserului fără delay artificial
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    const { port1, port2 } = new MessageChannel();
+    port1.onmessage = () => {
+      port1.close();
+      resolve();
+    };
+    port2.postMessage(null);
+    port2.close();
+  });
+}
+
+async function waitForEncoderBackpressure(
+  encoder: VideoEncoder,
+  maxQueueSize = 8
+): Promise<void> {
+  if (encoder.encodeQueueSize <= maxQueueSize) return;
+
+  await new Promise<void>((resolve) => {
+    let resolved = false;
+
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      encoder.removeEventListener('dequeue', onDequeue);
+      clearTimeout(timeoutId);
+      resolve();
+    };
+
+    const onDequeue = () => {
+      if (encoder.encodeQueueSize <= maxQueueSize) finish();
+    };
+
+    // Timeout de siguranță redus la 4ms — doar fallback dacă dequeue nu trage
+    const timeoutId = window.setTimeout(finish, 4);
+
+    encoder.addEventListener('dequeue', onDequeue);
+
+    if (encoder.encodeQueueSize <= maxQueueSize) finish();
+  });
+}
+
+function getBrowserHints() {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+
+  return {
+    isFirefox: /firefox/i.test(ua),
+    isChrome:
+      /chrome|chromium|crios/i.test(ua) &&
+      !/edg|opr|opera/i.test(ua),
+    isSafari:
+      /^((?!chrome|android).)*safari/i.test(ua),
+  };
+}
+
+function getTargetWebCodecsBitrate(args: {
+  width: number;
+  height: number;
+  requestedBitrate: number;
+}): number {
+  const pixels = args.width * args.height;
+
+  if (pixels <= 640 * 360) {
+    return Math.min(args.requestedBitrate, 700_000);
+  }
+
+  if (pixels <= 1280 * 720) {
+    return Math.min(args.requestedBitrate, 1_200_000);
+  }
+
+  return Math.min(args.requestedBitrate, 1_800_000);
+}
+
+async function muxAudioIntoWebmWithFFmpeg(args: {
+  ffmpeg: FFmpeg;
+  videoOnlyBlob: Blob;
+  originalFile: File;
+}): Promise<Blob> {
+  const { ffmpeg, videoOnlyBlob, originalFile } = args;
+
+  const ts = Date.now();
+  const videoWebmName = `__wc_video_${ts}.webm`;
+  const originalMp4Name = `__wc_orig_${ts}.mp4`;
+  const outputName = `__wc_muxed_${ts}.webm`;
+
+  try {
+    const videoBytes = new Uint8Array(await videoOnlyBlob.arrayBuffer());
+    await ffmpeg.writeFile(videoWebmName, videoBytes);
+
+    const mp4Bytes = await fetchFile(originalFile);
+    await ffmpeg.writeFile(originalMp4Name, mp4Bytes);
+
+    // Copiem video stream din WebM, re-encodăm audio din MP4 cu libvorbis
+    await ffmpeg.exec([
+      '-i', videoWebmName,
+      '-i', originalMp4Name,
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+      '-c:v', 'copy',
+      '-c:a', 'libvorbis',
+      '-b:a', '128k',
+      outputName,
+    ]);
+
+    const outputData = await ffmpeg.readFile(outputName);
+    if (typeof outputData === 'string') {
+      throw new Error('FFmpeg audio mux: output binar așteptat, primit text.');
+    }
+
+    const safeBytes = new Uint8Array(outputData.byteLength);
+    safeBytes.set(outputData);
+    return new Blob([safeBytes], { type: 'video/webm' });
+  } finally {
+    for (const name of [videoWebmName, originalMp4Name, outputName]) {
+      try { await ffmpeg.deleteFile(name); } catch {}
+    }
+  }
+}
+
 async function convertMp4ToWebmWithWebCodecs(args: {
   file: File;
   onProgress?: (progress01: number) => void;
@@ -476,151 +812,273 @@ async function convertMp4ToWebmWithWebCodecs(args: {
   framerate?: number;
 }): Promise<{
   blob: Blob;
+  hasAudio: boolean;
   width: number;
   height: number;
   frameCount: number;
-  runtimeMode: 'native' | 'polyfill';
+  runtimeMode: 'native';
 }> {
   const {
     file,
     onProgress,
     codec = 'vp8',
-    bitrate = 1_800_000,
+    bitrate = 1_200_000,
     framerate = 30,
   } = args;
 
-  const { track, samples } = await demuxMp4Video(file);
+  // ── Pasul 1: citim doar primul chunk pentru metadata + gate check ──────────
+  const demuxStartedAt = performance.now();
+  const { videoTrack: gateVideoTrack, audioTrack: gateAudioTrack, videoSamples: gateSamples } = await demuxMp4(file);
 
-  if (!samples.length) {
-    throw new Error('Nu există sample-uri video.');
-  }
-
-  if (!samples[0].isSync) {
-    throw new Error('Primul sample MP4 nu este keyframe. WebCodecs nu poate porni decoderul corect.');
-  }
+  if (!gateVideoTrack) throw new Error('Nu există track video.');
+  if (!gateSamples.length) throw new Error('Nu există sample-uri video.');
+  if (!gateSamples[0].isSync) throw new Error('Primul sample MP4 nu este keyframe.');
 
   const runtime = await getWebCodecsRuntime({
-    width: track.width,
-    height: track.height,
+    width: gateVideoTrack.width,
+    height: gateVideoTrack.height,
     framerate,
     bitrate,
     preferredCodec: codec,
   });
 
+  const tunedBitrate = getTargetWebCodecsBitrate({
+    width: gateVideoTrack.width,
+    height: gateVideoTrack.height,
+    requestedBitrate: bitrate,
+  });
+
+  const { isFirefox, isChrome } = getBrowserHints();
+  const keyframeInterval = isFirefox ? 300 : isChrome ? 600 : 480;
+  const firefoxMaxQueueSize = 32;
+  const hwAccel = runtime.hardwareAcceleration;
+
   console.log('[WebCodecs runtime]', {
     mode: runtime.mode,
     codec,
-    sourceCodec: track.codec,
-    width: track.width,
-    height: track.height,
+    sourceVideoCodec: gateVideoTrack.codec,
+    width: gateVideoTrack.width,
+    height: gateVideoTrack.height,
     framerate,
-    bitrate,
+    bitrateRequested: bitrate,
+    bitrateUsed: tunedBitrate,
+    browser: isFirefox ? 'firefox' : isChrome ? 'chrome' : 'other',
+    keyframeInterval,
+    hasAudio: !!gateAudioTrack,
   });
 
-  const encodedChunks: EncodedChunkRecord[] = [];
-  let decodedCount = 0;
-  let encodedCount = 0;
-  let decoderError: unknown = null;
-  let encoderError: unknown = null;
+  // ── Pasul 2: setup encoder + decoder ──────────────────────────────────────
+  const pipelineStartedAt = performance.now();
 
-  const encoder = new runtime.VideoEncoderCtor({
+  const encodedVideoChunks: EncodedChunkRecord[] = [];
+  let decodedVideoCount = 0;
+  let encodedVideoCount = 0;
+  let totalSampleCount = 0; // actualizat pe măsură ce vin sample-urile
+  let videoDecoderError: unknown = null;
+  let videoEncoderError: unknown = null;
+
+  const videoDecoderConfig: VideoDecoderConfig = {
+    codec: gateVideoTrack.codec,
+    codedWidth: gateVideoTrack.width,
+    codedHeight: gateVideoTrack.height,
+    hardwareAcceleration: hwAccel,
+  };
+
+  if (gateVideoTrack.description?.byteLength) {
+    videoDecoderConfig.description = gateVideoTrack.description;
+  }
+
+  // Queue de frames decoded care așteaptă să fie encodate (Firefox path)
+  const decodedFramesQueue: VideoFrame[] = [];
+  let demuxDone = false;
+
+  // ── Encoder — comun pentru Chrome și Firefox ────────────────────────────────
+  const videoEncoder = new runtime.VideoEncoderCtor({
     output: (chunk: EncodedVideoChunk) => {
       const copy = new Uint8Array(chunk.byteLength);
       chunk.copyTo(copy);
-
-      encodedChunks.push({
+      encodedVideoChunks.push({
         data: copy,
         timestamp: chunk.timestamp,
         duration: chunk.duration ?? undefined,
         type: chunk.type,
       });
-
-      encodedCount += 1;
-      onProgress?.(0.9 + Math.min(0.1, encodedCount / Math.max(1, samples.length)));
-    },
-    error: (e: DOMException) => {
-      console.error('[WebCodecs encoder error]', e);
-      encoderError = e;
-    },
-  });
-
-  const decoder = new runtime.VideoDecoderCtor({
-    output: (frame: VideoFrame) => {
-      try {
-        encoder.encode(frame, {
-          keyFrame: decodedCount % 60 === 0,
-        });
-        decodedCount += 1;
-        onProgress?.(Math.min(0.9, decodedCount / samples.length));
-      } finally {
-        frame.close();
+      encodedVideoCount += 1;
+      if (totalSampleCount > 0) {
+        onProgress?.(0.85 * Math.min(1, encodedVideoCount / totalSampleCount));
       }
     },
     error: (e: DOMException) => {
-      console.error('[WebCodecs decoder error]', e);
-      decoderError = e;
+      console.error('[WebCodecs video encoder error]', e);
+      videoEncoderError = e;
     },
   });
 
-  const decoderConfig: VideoDecoderConfig = {
-    codec: track.codec,
-    codedWidth: track.width,
-    codedHeight: track.height,
-  };
-  
-  if (track.description?.byteLength) {
-    decoderConfig.description = track.description;
-  }
-  
-  decoder.configure(decoderConfig);
-
-  encoder.configure({
+  videoEncoder.configure({
     codec,
-    width: track.width,
-    height: track.height,
-    bitrate,
+    width: gateVideoTrack.width,
+    height: gateVideoTrack.height,
+    bitrate: tunedBitrate,
     framerate,
-    latencyMode: 'quality',
+    latencyMode: 'realtime',
+    hardwareAcceleration: hwAccel,
   });
 
-  for (const sample of samples) {
-    if (decoderError) throw decoderError;
-    if (encoderError) throw encoderError;
+  // ── Decoder ────────────────────────────────────────────────────────────────
+  const videoDecoder = new runtime.VideoDecoderCtor({
+    output: (frame: VideoFrame) => {
+      if (isChrome) {
+        // Chrome: encodăm direct în callback — sync path, zero queue overhead
+        try {
+          if (videoEncoderError) { frame.close(); return; }
+          const shouldForceKeyframe =
+            decodedVideoCount === 0 || decodedVideoCount % keyframeInterval === 0;
+          videoEncoder.encode(frame, { keyFrame: shouldForceKeyframe });
+          decodedVideoCount += 1;
+          if (totalSampleCount > 0) {
+            onProgress?.(0.85 * Math.min(1, decodedVideoCount / totalSampleCount));
+          }
+        } finally {
+          frame.close();
+        }
+      } else {
+        // Firefox: punem în queue, pump-ul le preia asincron
+        decodedFramesQueue.push(frame);
+      }
+    },
+    error: (e: DOMException) => {
+      console.error('[WebCodecs video decoder error]', e);
+      videoDecoderError = e;
+    },
+  });
 
-    const chunk = new runtime.EncodedVideoChunkCtor({
-      type: sample.isSync ? 'key' : 'delta',
-      timestamp: sample.timestampUs,
-      duration: sample.durationUs,
-      data: sample.data,
-    });
+  videoDecoder.configure(videoDecoderConfig);
 
-    decoder.decode(chunk);
+  // ── Firefox pump — rulează în paralel cu demux-ul ─────────────────────────
+  let pumpPromise: Promise<void> | null = null;
+
+  if (!isChrome) {
+    pumpPromise = (async () => {
+      while (!demuxDone || decodedFramesQueue.length > 0) {
+        if (videoDecoderError) throw videoDecoderError;
+        if (videoEncoderError) throw videoEncoderError;
+
+        if (decodedFramesQueue.length === 0) {
+          await yieldToEventLoop();
+          continue;
+        }
+
+        const batch = decodedFramesQueue.splice(0, decodedFramesQueue.length);
+        for (const frame of batch) {
+          if (videoDecoderError || videoEncoderError) {
+            for (const f of batch) try { f.close(); } catch {}
+            if (videoDecoderError) throw videoDecoderError;
+            throw videoEncoderError;
+          }
+          try {
+            await waitForEncoderBackpressure(videoEncoder, firefoxMaxQueueSize);
+            const shouldForceKeyframe =
+              decodedVideoCount === 0 || decodedVideoCount % keyframeInterval === 0;
+            videoEncoder.encode(frame, { keyFrame: shouldForceKeyframe });
+            decodedVideoCount += 1;
+            if (totalSampleCount > 0) {
+              onProgress?.(0.85 * Math.min(1, decodedVideoCount / totalSampleCount));
+            }
+          } finally {
+            frame.close();
+          }
+        }
+      }
+    })();
   }
 
-  await decoder.flush();
-  if (decoderError) throw decoderError;
+  // ── Pasul 3: streaming demux + decode în paralel ───────────────────────────
+  // demuxMp4Streaming citește fișierul în chunks de 16MB și apelează
+  // onVideoSamples pe măsură ce vine fiecare batch — nu acumulăm nimic în RAM
+  let hasAudio = false;
 
-  await encoder.flush();
-  if (encoderError) throw encoderError;
+  await demuxMp4Streaming(file, {
+    onReady: (_vt, audioTrk) => {
+      hasAudio = !!audioTrk;
+    },
+    onVideoSamples: async (samples) => {
+      if (videoDecoderError) throw videoDecoderError;
+      if (videoEncoderError) throw videoEncoderError;
 
-  decoder.close();
-  encoder.close();
+      totalSampleCount += samples.length;
+
+      for (const sample of samples) {
+        const chunk = new runtime.EncodedVideoChunkCtor({
+          type: sample.isSync ? 'key' : 'delta',
+          timestamp: sample.timestampUs,
+          duration: sample.durationUs,
+          data: sample.data,
+        });
+        videoDecoder.decode(chunk);
+      }
+
+      // Yield după fiecare batch de sample-uri
+      // lasă decoder-ul + encoder-ul să lucreze înainte de batch-ul următor
+      await yieldToEventLoop();
+    },
+    onError: (err) => {
+      videoDecoderError = err;
+    },
+  });
+
+  const demuxEndedAt = performance.now();
+
+  // ── Pasul 4: flush și așteptăm pipeline-ul să termine ────────────────────
+  await videoDecoder.flush();
+  demuxDone = true;
+
+  if (pumpPromise) await pumpPromise;
+
+  if (videoDecoderError) throw videoDecoderError;
+  if (videoEncoderError) throw videoEncoderError;
+
+  await videoEncoder.flush();
+
+  if (videoDecoderError) throw videoDecoderError;
+  if (videoEncoderError) throw videoEncoderError;
+
+  videoDecoder.close();
+
+  const pipelineEndedAt = performance.now();
+  videoEncoder.close();
+
+  // ── Pasul 5: mux WebM ────────────────────────────────────────────────────
+  const muxStartedAt = performance.now();
+  const blob = await muxWebMFromEncodedChunks({
+    videoChunks: encodedVideoChunks,
+    width: gateVideoTrack.width,
+    height: gateVideoTrack.height,
+    codec,
+    framerate,
+  });
+  const muxEndedAt = performance.now();
 
   onProgress?.(1);
 
-  const blob = await muxWebMFromEncodedChunks({
-  chunks: encodedChunks,
-  width: track.width,
-  height: track.height,
-  codec,
-  framerate,
-});
+  console.log('[WebCodecs timings]', {
+    browser: isFirefox ? 'firefox' : isChrome ? 'chrome' : 'other',
+    demuxMs: Math.round(demuxEndedAt - demuxStartedAt),
+    pipelineMs: Math.round(pipelineEndedAt - pipelineStartedAt),
+    muxMs: Math.round(muxEndedAt - muxStartedAt),
+    decodedVideoFrames: decodedVideoCount,
+    encodedVideoChunks: encodedVideoCount,
+    totalSamples: totalSampleCount,
+    finalSizeBytes: blob.size,
+    finalSizeHuman: formatBytes(blob.size),
+    hasAudioTrack: hasAudio,
+  });
 
   return {
     blob,
-    width: track.width,
-    height: track.height,
-    frameCount: samples.length,
+    hasAudio,
+    width: gateVideoTrack.width,
+    height: gateVideoTrack.height,
+    frameCount: totalSampleCount,
     runtimeMode: runtime.mode,
   };
 }
@@ -635,7 +1093,6 @@ export const VideoConverter: React.FC = () => {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
-  const [, setStatusText] = useState('Inițializare FFmpeg...');
   const [error, setError] = useState<string | null>(null);
 
   const [resultUrl, setResultUrl] = useState<string | null>(null);
@@ -654,6 +1111,7 @@ export const VideoConverter: React.FC = () => {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
   const inputPreviewUrlRef = useRef<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const videoFormats = useMemo(() => Object.keys(FORMATS) as VideoFormat[], []);
   const supportedWebmMimeType = useMemo(() => pickSupportedWebmMimeType(), []);
@@ -687,6 +1145,13 @@ export const VideoConverter: React.FC = () => {
       mediaStreamRef.current = null;
     }
 
+    if (audioContextRef.current) {
+      try {
+        void audioContextRef.current.close();
+      } catch {}
+      audioContextRef.current = null;
+    }
+
     mediaChunksRef.current = [];
   }, []);
 
@@ -701,19 +1166,21 @@ export const VideoConverter: React.FC = () => {
 
         ffmpeg.on('progress', ({ progress: nextProgress }) => {
           const percent = Math.max(0, Math.min(100, Math.round(nextProgress * 100)));
-          setProgress(percent);
-          setStatusText(`Convertesc... ${percent}%`);
+          setProgress((prev) => {
+            // Dacă suntem în faza audio mux (prev >= 85), mapăm progresul FFmpeg în 87–99%
+            if (prev >= 85) return Math.max(prev, Math.round(87 + nextProgress * 12));
+            // Conversie FFmpeg completă: folosim direct
+            return percent;
+          });
         });
 
         await ffmpeg.load();
 
         ffmpegRef.current = ffmpeg;
         setIsReady(true);
-        setStatusText('FFmpeg este gata.');
       } catch (err) {
         console.error(err);
         setError('FFmpeg nu s-a putut încărca.');
-        setStatusText('Eroare la inițializare.');
       } finally {
         setIsLoadingEngine(false);
       }
@@ -805,7 +1272,6 @@ export const VideoConverter: React.FC = () => {
     setSelectedFile(null);
     setError(null);
     setProgress(0);
-    setStatusText(isReady ? 'Pregătit pentru conversie.' : 'Inițializare FFmpeg...');
     resetResult();
     stopMediaRecorderResources();
 
@@ -827,54 +1293,80 @@ export const VideoConverter: React.FC = () => {
     setSourceDurationSec(null);
     setSourceFps(null);
     setConversionTimeMs(null);
-  }, [isReady, resetResult, stopMediaRecorderResources]);
+  }, [resetResult, stopMediaRecorderResources]);
 
   const convertWithWebCodecs = useCallback(async (): Promise<boolean> => {
     if (!selectedFile) return false;
     if (inputType !== 'mp4' || outputType !== 'webm') return false;
 
-    setStatusText('Convertesc cu WebCodecs...');
     setProgress(0);
 
-    const result = await convertMp4ToWebmWithWebCodecs({
+    const wcResult = await convertMp4ToWebmWithWebCodecs({
       file: selectedFile,
       codec: 'vp8',
-      bitrate: 1_800_000,
+      bitrate: 1_200_000,
       framerate: sourceFps != null ? Math.max(1, Math.round(sourceFps)) : 30,
       onProgress: (p) => {
-        const percent = Math.round(p * 100);
-        setProgress(percent);
-        setStatusText(`Convertesc cu WebCodecs... ${percent}%`);
+        setProgress(Math.round(p * 100));
       },
     });
 
-    const url = URL.createObjectURL(result.blob);
+    let finalBlob: Blob;
 
+    if (wcResult.hasAudio && ffmpegRef.current && isReady) {
+      // Audio mux via FFmpeg — video stream e copiat direct, doar audio se encodează
+      console.log('[WebCodecs] Audio track detectat, pornesc mux audio via FFmpeg...');
+      setProgress(87);
+
+      try {
+        finalBlob = await muxAudioIntoWebmWithFFmpeg({
+          ffmpeg: ffmpegRef.current,
+          videoOnlyBlob: wcResult.blob,
+          originalFile: selectedFile,
+        });
+        console.log('[WebCodecs+FFmpeg audio mux] success', {
+          finalSizeBytes: finalBlob.size,
+          finalSizeHuman: formatBytes(finalBlob.size),
+        });
+      } catch (muxErr) {
+        // Audio mux eșuat — returnăm video fără audio, non-fatal
+        console.warn('[WebCodecs+FFmpeg audio mux] eșuat, video fără audio:', muxErr);
+        finalBlob = wcResult.blob;
+        setError('Audioul nu a putut fi adăugat (FFmpeg mux eșuat). Fișierul nu conține audio.');
+      }
+    } else if (wcResult.hasAudio && (!ffmpegRef.current || !isReady)) {
+      // FFmpeg nu e gata încă
+      console.warn('[WebCodecs] FFmpeg nu e gata, video fără audio.');
+      finalBlob = wcResult.blob;
+      setError('FFmpeg nu este încărcat încă. Fișierul nu conține audio.');
+    } else {
+      // Sursa nu are audio track
+      console.log('[WebCodecs] Sursă fără audio, finalizăm direct.');
+      finalBlob = wcResult.blob;
+    }
+
+    const url = URL.createObjectURL(finalBlob);
     setResultUrl(url);
-    setResultSize(result.blob.size);
+    setResultSize(finalBlob.size);
     setEngineUsed('webcodecs');
     setProgress(100);
-    setStatusText(
-      result.runtimeMode === 'native'
-        ? 'Conversie WebCodecs finalizată.'
-        : 'Conversie WebCodecs polyfill finalizată.'
-    );
 
     console.log('[Conversion output]', {
       engine: 'webcodecs',
-      runtimeMode: result.runtimeMode,
-      outputSizeBytes: result.blob.size,
-      outputSizeHuman: formatBytes(result.blob.size),
+      audioMuxed: wcResult.hasAudio && !!ffmpegRef.current && isReady,
+      runtimeMode: wcResult.runtimeMode,
+      outputSizeBytes: finalBlob.size,
+      outputSizeHuman: formatBytes(finalBlob.size),
       outputType: 'webm',
-      width: result.width,
-      height: result.height,
-      frameCount: result.frameCount,
+      width: wcResult.width,
+      height: wcResult.height,
+      frameCount: wcResult.frameCount,
     });
 
     return true;
-  }, [selectedFile, inputType, outputType, sourceFps]);
+  }, [selectedFile, inputType, outputType, sourceFps, isReady]);
 
-    const convertWithMediaRecorder = useCallback(async (): Promise<boolean> => {
+  const convertWithMediaRecorder = useCallback(async (): Promise<boolean> => {
     if (!selectedFile) return false;
     if (inputType !== 'mp4' || outputType !== 'webm') return false;
     if (!supportedWebmMimeType) return false;
@@ -885,7 +1377,6 @@ export const VideoConverter: React.FC = () => {
     const inputUrl = inputPreviewUrlRef.current;
     if (!inputUrl) return false;
 
-    setStatusText('Pregătesc conversia rapidă...');
     setProgress(0);
 
     stopMediaRecorderResources();
@@ -896,6 +1387,7 @@ export const VideoConverter: React.FC = () => {
     video.defaultMuted = true;
     video.volume = 0;
     video.playsInline = true;
+    video.crossOrigin = 'anonymous';
     video.src = inputUrl;
 
     await new Promise<void>((resolve, reject) => {
@@ -926,13 +1418,43 @@ export const VideoConverter: React.FC = () => {
       throw new Error('captureStream() nu este disponibil în acest browser.');
     }
 
-    const stream = captureStreamFn.call(video);
-    mediaStreamRef.current = stream;
+    const capturedStream = captureStreamFn.call(video) as MediaStream;
+    const combinedStream = new MediaStream();
+
+    for (const track of capturedStream.getVideoTracks()) {
+      combinedStream.addTrack(track);
+    }
+
+    const AudioContextCtor =
+      (window as any).AudioContext || (window as any).webkitAudioContext;
+
+    if (!AudioContextCtor) {
+      throw new Error('AudioContext nu este disponibil pentru fallback-ul MediaRecorder.');
+    }
+
+    const audioContext = new AudioContextCtor();
+    audioContextRef.current = audioContext;
+
+    const sourceNode = audioContext.createMediaElementSource(video);
+    const destinationNode = audioContext.createMediaStreamDestination();
+
+    sourceNode.connect(destinationNode);
+
+    for (const track of destinationNode.stream.getAudioTracks()) {
+      combinedStream.addTrack(track);
+    }
+
+    if (!combinedStream.getAudioTracks().length) {
+      throw new Error('Nu am putut captura audio pentru MediaRecorder fallback.');
+    }
+
+    mediaStreamRef.current = combinedStream;
     mediaChunksRef.current = [];
 
-    const recorder = new MediaRecorder(stream, {
+    const recorder = new MediaRecorder(combinedStream, {
       mimeType: supportedWebmMimeType,
       videoBitsPerSecond: 1_200_000,
+      audioBitsPerSecond: 128_000,
     });
 
     mediaRecorderRef.current = recorder;
@@ -946,7 +1468,6 @@ export const VideoConverter: React.FC = () => {
     recorder.onerror = (event) => {
       console.error('[MediaRecorder error]', event);
       setError('MediaRecorder a dat eroare în timpul conversiei rapide.');
-      setStatusText('Eroare la conversia rapidă.');
     };
 
     const resultPromise = new Promise<void>((resolve, reject) => {
@@ -964,7 +1485,6 @@ export const VideoConverter: React.FC = () => {
           setResultSize(blob.size);
           setEngineUsed('mediarecorder');
           setProgress(100);
-          setStatusText('Conversie rapidă finalizată.');
 
           console.log('[Conversion output]', {
             engine: 'mediarecorder',
@@ -1004,10 +1524,12 @@ export const VideoConverter: React.FC = () => {
 
     recorder.start(1000);
     setEngineUsed('mediarecorder');
-    setStatusText('Convertesc rapid MP4 → WebM...');
     setProgress(15);
 
     try {
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
       await video.play();
     } catch (err) {
       console.error('[MediaRecorder play failed]', err);
@@ -1069,15 +1591,11 @@ export const VideoConverter: React.FC = () => {
       const fileData = await fetchFile(selectedFile);
 
       setEngineUsed('ffmpeg');
-      setStatusText('Scriu fișierul în memorie...');
       await ffmpeg.writeFile(inputName, fileData);
 
       const command = buildFFmpegCommand(inputName, outputName, outputType);
-
-      setStatusText('Pornesc conversia...');
       await ffmpeg.exec(command);
 
-      setStatusText('Citesc rezultatul...');
       const outputData = await ffmpeg.readFile(outputName);
 
       if (typeof outputData === 'string') {
@@ -1096,7 +1614,6 @@ export const VideoConverter: React.FC = () => {
       setResultUrl(url);
       setResultSize(blob.size);
       setProgress(100);
-      setStatusText('Conversie finalizată.');
 
       console.log('[Conversion output]', {
         engine: 'ffmpeg',
@@ -1124,7 +1641,6 @@ export const VideoConverter: React.FC = () => {
     setIsConverting(true);
     setError(null);
     setProgress(0);
-    setStatusText('Pregătesc fișierul...');
     resetResult();
 
     const startedAt = performance.now();
@@ -1145,10 +1661,9 @@ export const VideoConverter: React.FC = () => {
       const shouldUseFastPath = inputType === 'mp4' && outputType === 'webm';
 
       if (shouldUseFastPath) {
-        const canUseWebCodecs = await canUseWebCodecsForMp4ToWebm(selectedFile);
-
-        if (canUseWebCodecs) {
-          try {
+        try {
+          const canUseWebCodecs = await canUseWebCodecsForMp4ToWebm(selectedFile);
+          if (canUseWebCodecs) {
             const wcWorked = await convertWithWebCodecs();
             if (wcWorked) {
               const elapsedMs = performance.now() - startedAt;
@@ -1162,14 +1677,9 @@ export const VideoConverter: React.FC = () => {
 
               return;
             }
-          } catch (webCodecsError) {
-            console.warn('[WebCodecs failed]', webCodecsError);
-            setStatusText('WebCodecs a eșuat, încerc MediaRecorder...');
-            setProgress(5);
           }
-        } else {
-          console.log('[WebCodecs skipped] fallback la MediaRecorder/FFmpeg');
-          setStatusText('WebCodecs nu este potrivit pentru acest fișier, încerc MediaRecorder...');
+        } catch (webCodecsError) {
+          console.warn('[WebCodecs skipped/failed]', webCodecsError);
           setProgress(5);
         }
 
@@ -1189,7 +1699,6 @@ export const VideoConverter: React.FC = () => {
           }
         } catch (fastError) {
           console.warn('[MediaRecorder failed]', fastError);
-          setStatusText('Conversia rapidă a eșuat, încerc cu FFmpeg...');
           setProgress(5);
         }
       }
@@ -1211,7 +1720,6 @@ export const VideoConverter: React.FC = () => {
           ? err.message
           : 'Conversia a eșuat.'
       );
-      setStatusText('Eroare la conversie.');
     } finally {
       setIsConverting(false);
     }
@@ -1229,6 +1737,7 @@ export const VideoConverter: React.FC = () => {
   ]);
 
   const canConvert = !!selectedFile && !isConverting && (isReady || (inputType === 'mp4' && outputType === 'webm'));
+
   return (
     <div
       style={{
