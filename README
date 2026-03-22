@@ -1,0 +1,171 @@
+<div align="center">
+
+<br />
+
+<img src="https://img.shields.io/badge/runs%20100%25-in%20your%20browser-7C3AED?style=for-the-badge&logoColor=white" />
+&nbsp;
+<img src="https://img.shields.io/badge/no%20server-no%20uploads-9B6DFF?style=for-the-badge&logoColor=white" />
+&nbsp;
+<img src="https://img.shields.io/badge/zero%20tracking-privacy%20first-16A34A?style=for-the-badge&logoColor=white" />
+
+<br /><br />
+
+# ⇄ Morph
+
+**A fast, private, local-first file converter — running entirely in your browser.**
+
+[**Live Demo →**](https://geamnegru.github.io/morph) &nbsp;·&nbsp; [Report Bug](https://github.com/geamnegru/morph/issues) &nbsp;·&nbsp; [Request Feature](https://github.com/geamnegru/morph/issues)
+
+---
+
+## ✦ Why Morph?
+
+Most online converters upload your files to a remote server, process them there, and keep a copy. **Morph** does the opposite — every byte stays on your machine, every conversion happens locally, and nothing ever touches a server.
+
+| | Morph | typical online converter |
+|---|---|---|
+| Files leave your device | ✗ Never | ✓ Always |
+| Works offline | ✓ Yes | ✗ No |
+| File size limits | ✗ None | ✓ Usually |
+| Ads / tracking | ✗ None | ✓ Usually |
+| Speed | ⚡ Hardware-accelerated | 🐢 Server queue |
+
+---
+
+## ⚡ Speed — the WebCodecs engine
+
+Video conversion uses a custom **three-tier engine** that picks the fastest method available in your browser:
+
+```
+MP4 → WebM conversion pipeline:
+
+1. ⚡ WebCodecs (GPU hardware encoder/decoder)
+   └─ Fastest. Uses your GPU directly via the WebCodecs API.
+      Video encode runs at hardware speed, audio is AAC copy (zero re-encode).
+
+2. 🎥 MediaRecorder (browser capture API)
+   └─ Fallback for browsers without full WebCodecs support.
+
+3. 🔧 FFmpeg WASM
+   └─ Universal fallback. Handles any format, any codec, any browser.
+      Slightly slower but works everywhere.
+```
+
+In practice, WebCodecs on a modern machine converts a **4K 60fps MP4 in under 180 seconds** — compared to minutes with traditional server-side tools.
+
+---
+
+## 🔒 Privacy, by design
+
+**Morph** has no backend. There is no server, no database, no analytics, no telemetry.
+
+- All processing happens in your browser using **WebCodecs**, **Canvas API**, **Web Audio API**, and **FFmpeg compiled to WebAssembly**
+- Files are read directly from your disk into browser memory and never serialized to a network request
+- Closing the tab wipes everything — no residual data, no cached files, no logs
+
+This isn't a privacy policy. It's an architectural fact.
+
+---
+
+## 🎬 What it converts
+
+### Video
+| Input | Output | Engine |
+|-------|--------|--------|
+| MP4, AVI, MOV, MKV, WebM | WebM | WebCodecs ⚡ / MediaRecorder / FFmpeg |
+| MP4, AVI, MOV, MKV, WebM | MP4, AVI, MOV, MKV | MediaRecorder / FFMpeg |
+
+### Audio
+| Input | Output |
+|-------|--------|
+| MP3, WAV, AAC, OGG, FLAC | Opus (OGG container) |
+
+### Image
+| Input | Output |
+|-------|--------|
+| PNG, JPG, WebP, AVIF, GIF | PNG, JPG, WebP, AVIF |
+
+### Text / Data
+| Input | Output |
+|-------|--------|
+| TXT, JSON, YAML, CSV | JSON, YAML, CSV, HTML, Base64, LOG |
+
+---
+
+## 🛠 Tech stack
+
+```
+React + TypeScript          — UI framework
+WebCodecs API               — GPU-accelerated video encode/decode
+FFmpeg.wasm                 — Universal media processing fallback
+MP4Box.js                   — MP4 demuxing and streaming
+webm-muxer                  — WebM container muxing
+jsquash/avif                — AVIF encoding via WebAssembly
+DM Sans + DM Mono           — Typography
+```
+
+---
+
+## 🚀 Getting started
+
+```bash
+git clone https://github.com/geamnegru/morph.git
+cd morph
+npm install
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) and start converting.
+
+### Build for production
+
+```bash
+npm run build
+npm run preview
+```
+
+> **Note:** FFmpeg WASM requires specific HTTP headers to enable `SharedArrayBuffer`. Make sure your server sets:
+> ```
+> Cross-Origin-Opener-Policy: same-origin
+> Cross-Origin-Embedder-Policy: require-corp
+> ```
+> These are already configured in `vite.config.ts`.
+
+---
+
+## 🧩 Project structure
+
+```
+src/
+├── components/
+│   ├── VideoConverter.tsx     # WebCodecs + FFmpeg video pipeline
+│   ├── AudioConverter.tsx     # FFmpeg audio conversion
+│   ├── ImageConverter.tsx     # Canvas + jsquash image conversion
+│   └── TextConverter.tsx      # Pure JS text/data conversion
+├── App.tsx                    # Tab navigation shell
+├── styles.css                 # Design system (DM Sans, purple/white palette)
+├── constants.ts               # Format definitions
+└── types.ts                   # TypeScript types
+```
+
+---
+
+## 🤝 Contributing
+
+Pull requests are welcome. For major changes, open an issue first.
+
+1. Fork the repo
+2. Create a branch: `git checkout -b feature/your-feature`
+3. Commit: `git commit -m 'feat: add your feature'`
+4. Push: `git push origin feature/your-feature`
+5. Open a pull request
+
+---
+
+<div align="center">
+
+Made with 0 servers and 100% local processing.
+
+**If Morph saved you from uploading a file somewhere sketchy, consider leaving a ⭐**
+
+</div>

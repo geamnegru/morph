@@ -2,88 +2,55 @@ import { useState } from 'react';
 import { VideoConverter } from './components/VideoConverter';
 import { TextConverter } from './components/TextConverter';
 import { ImageConverter } from './components/ImageConverter';
-import { AudioConverter } from './components/AudioConverter';  // 🔥 NOU!
+import { AudioConverter } from './components/AudioConverter';
+import './styles.css';
 
-type ConverterTab = 'video' | 'text' | 'image' | 'audio';  // 🔥 + audio
+type ConverterTab = 'video' | 'text' | 'image' | 'audio';
+
+const tabs = [
+  { id: 'video' as const, label: 'Video', icon: '▶' },
+  { id: 'audio' as const, label: 'Audio', icon: '♪' },
+  { id: 'image' as const, label: 'Image', icon: '◻' },
+  { id: 'text'  as const, label: 'Text',  icon: '≡' },
+];
 
 const App = () => {
-  const [activeTab, setActiveTab] = useState<ConverterTab>('video');
+  const [active, setActive] = useState<ConverterTab>('video');
 
-  const tabs = [
-    { id: 'video' as const, title: '🎬 VIDEO', component: <VideoConverter /> },
-    { id: 'text' as const, title: '📄 TEXT', component: <TextConverter /> },
-    { id: 'image' as const, title: '🖼️ IMAGE', component: <ImageConverter /> },
-    { id: 'audio' as const, title: '🎵 AUDIO', component: <AudioConverter /> }  // 🔥 NOU!
-  ] as const;
+  const components: Record<ConverterTab, React.ReactNode> = {
+    video: <VideoConverter />,
+    audio: <AudioConverter />,
+    image: <ImageConverter />,
+    text:  <TextConverter />,
+  };
 
   return (
-    <div style={{ 
-      maxWidth: '900px',
-      margin: '0 auto', 
-      padding: '20px', 
-      minHeight: '100vh',
-      background: '#f5f5f5'
-    }}>
-      <div style={{ 
-        display: 'flex', 
-        gap: '4px',
-        marginBottom: '30px', 
-        background: 'white',
-        padding: '12px', 
-        borderRadius: '16px', 
-        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-        border: '2px solid #e9ecef',
-        flexWrap: 'wrap'
-      }}>
-        {tabs.map(tab => (
-          <button 
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            style={{
-              flex: 1, 
-              minWidth: '120px',
-              padding: '16px 12px', 
-              background: activeTab === tab.id ? '#667eea' : '#f8f9fa',
-              color: activeTab === tab.id ? 'white' : '#495057',
-              border: 'none', 
-              borderRadius: '12px', 
-              fontWeight: 'bold', 
-              fontSize: '15px',
-              cursor: 'pointer',
-              transition: 'all 0.3s ease',
-              boxShadow: activeTab === tab.id ? '0 4px 12px rgba(102,126,234,0.4)' : 'none'
-            }}
-            onMouseEnter={(e) => {
-              if (activeTab !== tab.id) {
-                e.currentTarget.style.background = '#e9ecef';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (activeTab !== tab.id) {
-                e.currentTarget.style.background = '#f8f9fa';
-              }
-            }}
-          >
-            {tab.title}
-          </button>
-        ))}
+    <div className="app">
+      <div className="app-header">
+        <div className="app-logo">
+          <div className="app-logo-icon">⇄</div>
+          <span className="app-logo-name">morph</span>
+        </div>
+        <p className="app-tagline">Morph files locally — nothing leaves your browser</p>
       </div>
-      <div style={{ 
-        background: 'white', 
-        borderRadius: '20px', 
-        padding: '30px',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-        minHeight: '600px'
-      }}>
-        {tabs.find(t => t.id === activeTab)?.component}
+
+      <div className="tab-bar-wrap">
+        <div className="tab-bar">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActive(tab.id)}
+              className={`tab-btn${active === tab.id ? ' tab-btn--active' : ''}`}
+            >
+              <span className="tab-icon">{tab.icon}</span>
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div style={{ 
-        textAlign: 'center', 
-        marginTop: '30px', 
-        padding: '20px',
-        color: '#6c757d',
-        fontSize: '14px'
-      }}>
+
+      <div className="content-wrap">
+        {components[active]}
       </div>
     </div>
   );
