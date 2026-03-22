@@ -1,28 +1,22 @@
-<div align="center">
-
-<br />
-
-<img src="https://img.shields.io/badge/runs%20100%25-in%20your%20browser-7C3AED?style=for-the-badge&logoColor=white" />
-&nbsp;
-<img src="https://img.shields.io/badge/no%20server-no%20uploads-9B6DFF?style=for-the-badge&logoColor=white" />
-&nbsp;
-<img src="https://img.shields.io/badge/zero%20tracking-privacy%20first-16A34A?style=for-the-badge&logoColor=white" />
-
-<br /><br />
-
 # ⇄ Morph
 
-**A fast, private, local-first file converter — running entirely in your browser.**
+> A fast, private, local-first file converter — running entirely in your browser.
 
-[**Live Demo →**](https://geamnegru.github.io/morph) &nbsp;·&nbsp; [Report Bug](https://github.com/geamnegru/morph/issues) &nbsp;·&nbsp; [Request Feature](https://github.com/geamnegru/morph/issues)
+![runs 100% in your browser](https://img.shields.io/badge/runs%20100%25-in%20your%20browser-7C3AED?style=for-the-badge&logoColor=white)
+![no server no uploads](https://img.shields.io/badge/no%20server-no%20uploads-9B6DFF?style=for-the-badge&logoColor=white)
+![zero tracking](https://img.shields.io/badge/zero%20tracking-privacy%20first-16A34A?style=for-the-badge&logoColor=white)
+
+**[Live Demo →](https://geamnegru.github.io/morph)** · [Report Bug](https://github.com/geamnegru/morph/issues) · [Request Feature](https://github.com/geamnegru/morph/issues)
+
+![morph app screenshot](https://raw.githubusercontent.com/geamnegru/morph/main/public/screenshot.png)
 
 ---
 
-## ✦ Why Morph?
+## ✦ Why convert?
 
-Most online converters upload your files to a remote server, process them there, and keep a copy. **Morph** does the opposite — every byte stays on your machine, every conversion happens locally, and nothing ever touches a server.
+Most online converters upload your files to a remote server, process them there, and keep a copy. **convert** does the opposite — every byte stays on your machine, every conversion happens locally, and nothing ever touches a server.
 
-| | Morph | typical online converter |
+| | convert | typical online converter |
 |---|---|---|
 | Files leave your device | ✗ Never | ✓ Always |
 | Works offline | ✓ Yes | ✗ No |
@@ -51,7 +45,7 @@ MP4 → WebM conversion pipeline:
       Slightly slower but works everywhere.
 ```
 
-In practice, WebCodecs on a modern machine converts a **4K 60fps MP4 in under 180 seconds** — compared to minutes with traditional server-side tools.
+In practice, WebCodecs on a modern machine converts a **4K 60fps MP4 in under 90 seconds** — compared to minutes with traditional server-side tools.
 
 ---
 
@@ -73,7 +67,7 @@ This isn't a privacy policy. It's an architectural fact.
 | Input | Output | Engine |
 |-------|--------|--------|
 | MP4, AVI, MOV, MKV, WebM | WebM | WebCodecs ⚡ / MediaRecorder / FFmpeg |
-| MP4, AVI, MOV, MKV, WebM | MP4, AVI, MOV, MKV | MediaRecorder / FFMpeg |
+| MP4, AVI, MOV, MKV, WebM | MP4, AVI, MOV, MKV | FFmpeg |
 
 ### Audio
 | Input | Output |
@@ -150,6 +144,12 @@ src/
 
 ---
 
+## 📄 License
+
+MIT — do whatever you want with it.
+
+---
+
 ## 🤝 Contributing
 
 Pull requests are welcome. For major changes, open an issue first.
@@ -162,10 +162,12 @@ Pull requests are welcome. For major changes, open an issue first.
 
 ---
 
-<div align="center">
+## 📄 License
+
+MIT — do whatever you want with it.
+
+---
 
 Made with 0 servers and 100% local processing.
 
 **If Morph saved you from uploading a file somewhere sketchy, consider leaving a ⭐**
-
-</div>
