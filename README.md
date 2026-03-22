@@ -8,15 +8,13 @@
 
 **[Live Demo →](https://geamnegru.github.io/morph)** · [Report Bug](https://github.com/geamnegru/morph/issues) · [Request Feature](https://github.com/geamnegru/morph/issues)
 
-![morph app screenshot](https://raw.githubusercontent.com/geamnegru/morph/main/public/screenshot.png)
-
 ---
 
-## ✦ Why convert?
+## ✦ Why Morph?
 
-Most online converters upload your files to a remote server, process them there, and keep a copy. **convert** does the opposite — every byte stays on your machine, every conversion happens locally, and nothing ever touches a server.
+Most online converters upload your files to a remote server, process them there, and keep a copy. **Morph** does the opposite — every byte stays on your machine, every conversion happens locally, and nothing ever touches a server.
 
-| | convert | typical online converter |
+| | Morph | typical online converter |
 |---|---|---|
 | Files leave your device | ✗ Never | ✓ Always |
 | Works offline | ✓ Yes | ✗ No |
@@ -45,7 +43,7 @@ MP4 → WebM conversion pipeline:
       Slightly slower but works everywhere.
 ```
 
-In practice, WebCodecs on a modern machine converts a **4K 60fps MP4 in under 90 seconds** — compared to minutes with traditional server-side tools.
+In practice, WebCodecs on a modern machine converts a **4K 60fps MP4 in under 180 seconds** — compared to minutes with traditional server-side tools.
 
 ---
 
@@ -141,13 +139,6 @@ src/
 ├── constants.ts               # Format definitions
 └── types.ts                   # TypeScript types
 ```
-
----
-
-## 📄 License
-
-MIT — do whatever you want with it.
-
 ---
 
 ## 🤝 Contributing
@@ -159,14 +150,6 @@ Pull requests are welcome. For major changes, open an issue first.
 3. Commit: `git commit -m 'feat: add your feature'`
 4. Push: `git push origin feature/your-feature`
 5. Open a pull request
-
----
-
-## 📄 License
-
-MIT — do whatever you want with it.
-
----
 
 Made with 0 servers and 100% local processing.
 
