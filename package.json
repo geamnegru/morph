@@ -14,6 +14,7 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@jsquash/avif": "^2.1.1",
+    "@vercel/speed-insights": "^2.0.0",
     "@wetheredge/libavjs-webcodecs-polyfill": "^0.4.0",
     "libav.js": "^6.8.8",
     "libavjs-webcodecs-bridge": "^0.3.2",
