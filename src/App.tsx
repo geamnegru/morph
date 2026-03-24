@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { VideoConverter } from './components/VideoConverter';
 import { TextConverter } from './components/TextConverter';
 import { ImageConverter } from './components/ImageConverter';
@@ -52,6 +53,7 @@ const App = () => {
       <div className="content-wrap">
         {components[active]}
       </div>
+      <SpeedInsights />
     </div>
   );
 };
