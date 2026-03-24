@@ -1,97 +1,115 @@
-import { useState, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
 import type { TextFormat } from '../types';
 import { textInputFormats, textOutputFormats } from '../constants';
+import { DropZone } from './DropZone';
 
-const converters: Record<string, (input: string, inType: string, outType: string) => string> = {
-  'txt-json': (t) => JSON.stringify({ content: t.trim() }, null, 2),
-  'txt-csv': (t) => t.split('\n').filter(l => l.trim()).map(l => `"${l.trim()}"`).join('\n'),
-  'txt-yaml': (t) => `content: |\n  ${t.trim().split('\n').join('\n  ')}`,
-  'txt-html': (t) => `<pre style="white-space:pre-wrap">${t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`,
-  'txt-log': (t) => `[${new Date().toISOString()}]\n${t}\n--- END LOG ---\n`,
-  'txt-upper': (t) => t.toUpperCase(),
-  'txt-base64': (t) => btoa(unescape(encodeURIComponent(t))),
-  'json-yaml': (json) => { try { return jsonToYaml(JSON.parse(json)); } catch { return json; } },
-  'json-txt': (json) => { try { const o = JSON.parse(json); return o.content || JSON.stringify(o, null, 2); } catch { return json; } },
-  'yaml-json': (yaml) => {
-    const obj: any = {};
-    yaml.split('\n').forEach(line => {
-      const t = line.trim();
-      if (t && !t.startsWith('#') && t.includes(':')) {
-        const [k, ...v] = t.split(':');
-        obj[k!.trim()] = v.join(':').trim();
-      }
-    });
-    return JSON.stringify(obj, null, 2);
-  },
-  'yaml-csv': (yaml) => yaml.split('\n').filter(l => l.trim() && !l.startsWith('#'))
-    .map(l => l.includes(':') ? `"${l.split(':')[1]?.trim() || ''}"` : `"${l.trim()}"`).join('\n'),
-  'yaml-txt': (yaml) => yaml.split('\n').filter(l => l.includes(':')).map(l => l.split(':')[1]?.trim() || l).join('\n'),
-  'csv-yaml': (csv) => csv.split('\n').filter(l => l.trim()).map((l, i) => `row_${i+1}: "${l.trim()}"`).join('\n'),
-  '*-txt': (t) => t,
-  '*-upper': (t) => t.toUpperCase(),
-  '*-base64': (t) => btoa(unescape(encodeURIComponent(t))),
+const formatBytes = (b: number) => {
+  if (b === 0) return '0 B';
+  const u = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return `${(b / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
 };
 
-function jsonToYaml(obj: any, indent = 0): string {
-  const sp = '  '.repeat(indent);
-  let yaml = '';
-  if (Array.isArray(obj)) {
-    obj.forEach(item => {
-      yaml += typeof item === 'object'
-        ? `${sp}- ${jsonToYaml(item, indent + 1)}\n`
-        : `${sp}- ${item}\n`;
-    });
-  } else if (obj && typeof obj === 'object') {
-    Object.entries(obj).forEach(([k, v]) => {
-      yaml += `${sp}${k}: `;
-      yaml += typeof v === 'object' && v !== null ? '\n' + jsonToYaml(v, indent + 1) : `${v}\n`;
-    });
-  } else { yaml += `${obj}\n`; }
-  return yaml.trim();
+const triggerDownload = (url: string, filename: string) => {
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.style.display = 'none';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+};
+
+type FileStatus = 'waiting' | 'converting' | 'done' | 'error';
+
+interface BatchFile {
+  id: string; file: File; status: FileStatus;
+  resultUrl: string | null; resultSize: number | null; error: string | null;
 }
 
 export const TextConverter = () => {
-  const [result, setResult] = useState<string | null>(null);
-  const [preview, setPreview] = useState('');
-  const [inputType, setInputType] = useState<TextFormat>(textInputFormats[0]);
+  const [inputType,  setInputType]  = useState<TextFormat>(textInputFormats[0]);
   const [outputType, setOutputType] = useState<TextFormat>(textOutputFormats[1]);
   const [converting, setConverting] = useState(false);
+  const [files, setFiles] = useState<BatchFile[]>([]);
+  const workerRef = useRef<Worker | null>(null);
+  // Map id → { resolve, reject } pentru promise-uri în așteptare
+  const pendingRef = useRef<Map<string, { resolve: (v: { buf: ArrayBuffer; outMime: string }) => void; reject: (e: Error) => void }>>(new Map());
 
-  const getKey = useCallback((a: string, b: string) => `${a}-${b}`, []);
+  useEffect(() => {
+    const worker = new Worker(
+      new URL('../workers/textWorker.ts', import.meta.url), { type: 'module' }
+    );
+    worker.onmessage = (e) => {
+      const { id, buf, outMime, error } = e.data;
+      const pending = pendingRef.current.get(id);
+      if (!pending) return;
+      pendingRef.current.delete(id);
+      if (error) pending.reject(new Error(error));
+      else pending.resolve({ buf, outMime });
+    };
+    workerRef.current = worker;
+    return () => worker.terminate();
+  }, []);
 
-  const convertText = async () => {
-    const fi = document.getElementById('textFile') as HTMLInputElement;
-    const file = fi?.files?.[0];
-    if (!file) return;
-    setConverting(true);
+  const updateFile = useCallback((id: string, patch: Partial<BatchFile>) => {
+    setFiles(prev => prev.map(f => f.id === id ? { ...f, ...patch } : f));
+  }, []);
+
+  const convertSingle = async (bf: BatchFile, inFmt: TextFormat, outFmt: TextFormat) => {
+    if (!workerRef.current) return;
+    updateFile(bf.id, { status: 'converting' });
     try {
-      const text = await file.text();
-      const key = getKey(inputType.id, outputType.id);
-      const converted = converters[key]?.(text, inputType.id, outputType.id)
-        ?? (converters[`*-${outputType.id}`] as any)?.(text, inputType.id, outputType.id)
-        ?? text;
-      const blob = new Blob([converted], { type: outputType.mime });
-      setResult(URL.createObjectURL(blob));
-      setPreview(converted.length > 500 ? converted.slice(0, 500) + '…' : converted);
-    } catch (e) { console.error(e); }
-    finally { setConverting(false); }
+      const text = await bf.file.text();
+      const { buf, outMime } = await new Promise<{ buf: ArrayBuffer; outMime: string }>((resolve, reject) => {
+        pendingRef.current.set(bf.id, { resolve, reject });
+        workerRef.current!.postMessage({ id: bf.id, text, inFmt: inFmt.id, outFmt: outFmt.id, outMime: outFmt.mime });
+      });
+      const blob = new Blob([buf], { type: outMime });
+      updateFile(bf.id, { status: 'done', resultUrl: URL.createObjectURL(blob), resultSize: blob.size });
+    } catch (e: any) {
+      updateFile(bf.id, { status: 'error', error: e?.message ?? 'Failed' });
+    }
   };
 
-  const download = () => {
-    if (!result) return;
-    const a = document.createElement('a');
-    a.href = result;
-    a.download = `converted-${Date.now()}.${outputType.ext}`;
-    a.click();
-    URL.revokeObjectURL(result);
+  const convertAll = async () => {
+    const pending = files.filter(f => f.status === 'waiting' || f.status === 'error');
+    if (!pending.length) return;
+    setConverting(true);
+    // Text e rapid — Promise.all e ok, worker serializează oricum
+    await Promise.all(pending.map(f => convertSingle(f, inputType, outputType)));
+    setConverting(false);
   };
 
-  const clear = () => {
-    setResult(null); setPreview('');
-    const fi = document.getElementById('textFile') as HTMLInputElement;
-    if (fi) fi.value = '';
+  const downloadAll = () => {
+    files.filter(f => f.resultUrl).forEach((f, i) => {
+      setTimeout(() => triggerDownload(
+        f.resultUrl!,
+        `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType.ext}`
+      ), i * 80);
+    });
   };
+
+  const clearAll = () => {
+    files.forEach(f => { if (f.resultUrl) URL.revokeObjectURL(f.resultUrl); });
+    setFiles([]);
+  };
+
+  const removeFile = (id: string) => {
+    setFiles(prev => {
+      const f = prev.find(x => x.id === id);
+      if (f?.resultUrl) URL.revokeObjectURL(f.resultUrl);
+      return prev.filter(x => x.id !== id);
+    });
+  };
+
+  const addFiles = useCallback((incoming: File[]) => {
+    const newFiles: BatchFile[] = incoming.map(f => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file: f, status: 'waiting', resultUrl: null, resultSize: null, error: null,
+    }));
+    setFiles(prev => [...prev, ...newFiles]);
+  }, []);
+
+  const doneCount    = files.filter(f => f.status === 'done').length;
+  const pendingCount = files.filter(f => f.status === 'waiting' || f.status === 'error').length;
 
   return (
     <div className="card">
@@ -99,10 +117,9 @@ export const TextConverter = () => {
         <div>
           <label className="label">From</label>
           <select className="select" value={inputType.id}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-              setInputType(textInputFormats.find(f => f.id === e.target.value)!);
-              setResult(null); setPreview('');
-            }} disabled={converting}>
+            onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+              setInputType(textInputFormats.find(f => f.id === e.target.value)!)
+            } disabled={converting}>
             {textInputFormats.map(f => <option key={f.id} value={f.id}>{f.name.toUpperCase()}</option>)}
           </select>
         </div>
@@ -110,44 +127,75 @@ export const TextConverter = () => {
         <div>
           <label className="label">To</label>
           <select className="select" value={outputType.id}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-              setOutputType(textOutputFormats.find(f => f.id === e.target.value)!);
-              setResult(null); setPreview('');
-            }} disabled={converting}>
+            onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+              setOutputType(textOutputFormats.find(f => f.id === e.target.value)!)
+            } disabled={converting}>
             {textOutputFormats.map(f => <option key={f.id} value={f.id}>{f.name.toUpperCase()}</option>)}
           </select>
         </div>
       </div>
 
       <div>
-        <label className="label">File</label>
-        <input id="textFile" type="file" className="file-input"
-          accept={inputType.accept} disabled={converting} />
+        <label className="label">Add files</label>
+        <DropZone
+          accept={inputType.accept}
+          multiple disabled={converting}
+          hint={`${inputType.name.toUpperCase()} files`}
+          onFiles={addFiles}
+        />
       </div>
 
-      <button className="btn-primary" onClick={convertText} disabled={converting}>
-        {converting ? 'Converting…' : 'Convert'}
-      </button>
-
-      {preview && (
-        <div className="text-preview">
-          <span className="text-preview-label">
-            Preview · {outputType.name}.{outputType.ext}
-          </span>
-          <pre>{preview}</pre>
+      {files.length > 0 && (
+        <div className="batch-file-list">
+          {files.map(f => (
+            <div key={f.id} className={`batch-file-item batch-file-item--${f.status}`}>
+              <div className="batch-file-name" title={f.file.name}>{f.file.name}</div>
+              <div className="batch-file-size">{formatBytes(f.file.size)}</div>
+              {f.status === 'done' && f.resultSize !== null && (
+                <div className="batch-file-size" style={{ color: '#16A34A' }}>
+                  → {formatBytes(f.resultSize)}
+                </div>
+              )}
+              <div className={`batch-file-status batch-file-status--${f.status}`}>
+                {f.status === 'error' ? (f.error ?? 'error') : f.status}
+              </div>
+              {f.resultUrl && (
+                <button className="batch-download-btn"
+                  style={{ padding: '4px 10px', fontSize: '11px' }}
+                  onClick={() => triggerDownload(f.resultUrl!, `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType.ext}`)}>
+                  ↓
+                </button>
+              )}
+              {!converting && (
+                <button onClick={() => removeFile(f.id)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BBBBBB', fontSize: '14px', padding: '0 2px' }}>
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
-      {result && (
-        <div className="result-section">
-          <div className="badge badge--success">
-            {inputType.name.toUpperCase()} → {outputType.name.toUpperCase()} · ready
-          </div>
-          <div className="btn-row">
-            <button onClick={download} className="btn-download">Download</button>
-            <button onClick={clear} className="btn-ghost">Convert another</button>
-          </div>
+      {files.length > 0 && (
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button className="btn-primary" style={{ flex: 1 }}
+            onClick={convertAll} disabled={converting || pendingCount === 0}>
+            {converting ? 'Converting…' : `Convert ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`}
+          </button>
+          {doneCount > 0 && (
+            <button className="batch-download-btn" onClick={downloadAll}>
+              ↓ All ({doneCount})
+            </button>
+          )}
+          <button className="btn-ghost" onClick={clearAll} disabled={converting}>Clear</button>
         </div>
+      )}
+
+      {files.length === 0 && (
+        <p style={{ margin: 0, fontSize: '13px', color: '#BBBBBB', textAlign: 'center', padding: '8px 0' }}>
+          Add files above to get started
+        </p>
       )}
     </div>
   );

@@ -6,7 +6,7 @@
 ![no server no uploads](https://img.shields.io/badge/no%20server-no%20uploads-9B6DFF?style=for-the-badge&logoColor=white)
 ![zero tracking](https://img.shields.io/badge/zero%20tracking-privacy%20first-16A34A?style=for-the-badge&logoColor=white)
 
-**[Live Demo →](https://geamnegru.github.io/morph)** · [Report Bug](https://github.com/geamnegru/morph/issues) · [Request Feature](https://github.com/geamnegru/morph/issues)
+**[Live Demo →](https://morph-seven-gamma.vercel.app/)** · [Report Bug](https://github.com/geamnegru/morph/issues) · [Request Feature](https://github.com/geamnegru/morph/issues)
 
 ---
 
@@ -26,7 +26,7 @@ Most online converters upload your files to a remote server, process them there,
 
 ## ⚡ Speed — the WebCodecs engine
 
-Video conversion uses a custom **three-tier engine** that picks the fastest method available in your browser:
+Video conversion uses a custom **two-tier engine** that picks the fastest method available in your browser:
 
 ```
 MP4 → WebM conversion pipeline:
@@ -34,13 +34,9 @@ MP4 → WebM conversion pipeline:
 1. ⚡ WebCodecs (GPU hardware encoder/decoder)
    └─ Fastest. Uses your GPU directly via the WebCodecs API.
       Video encode runs at hardware speed, audio is AAC copy (zero re-encode).
-
-2. 🎥 MediaRecorder (browser capture API)
-   └─ Fallback for browsers without full WebCodecs support.
-
-3. 🔧 FFmpeg WASM
+2. 🔧 FFmpeg WASM
    └─ Universal fallback. Handles any format, any codec, any browser.
-      Slightly slower but works everywhere.
+      Slower but works everywhere.
 ```
 
 In practice, WebCodecs on a modern machine converts a **4K 60fps MP4 in under 180 seconds** — compared to minutes with traditional server-side tools.
@@ -64,7 +60,7 @@ This isn't a privacy policy. It's an architectural fact.
 ### Video
 | Input | Output | Engine |
 |-------|--------|--------|
-| MP4, AVI, MOV, MKV, WebM | WebM | WebCodecs ⚡ / MediaRecorder / FFmpeg |
+| MP4, AVI, MOV, MKV, WebM | WebM | WebCodecs ⚡ / FFmpeg |
 | MP4, AVI, MOV, MKV, WebM | MP4, AVI, MOV, MKV | FFmpeg |
 
 ### Audio
@@ -133,8 +129,13 @@ src/
 │   ├── VideoConverter.tsx     # WebCodecs + FFmpeg video pipeline
 │   ├── AudioConverter.tsx     # FFmpeg audio conversion
 │   ├── ImageConverter.tsx     # Canvas + jsquash image conversion
-│   └── TextConverter.tsx      # Pure JS text/data conversion
+│   ├── TextConverter.tsx      # Pure JS text/data conversion
+│   └── DropZone.tsx           # Reusable drag & drop file input
+├── workers/
+│   ├── imageWorker.ts         # OffscreenCanvas image conversion worker
+│   └── workerPool.ts          # Generic worker pool implementation
 ├── App.tsx                    # Tab navigation shell
+├── main.tsx                   # Entry point
 ├── styles.css                 # Design system (DM Sans, purple/white palette)
 ├── constants.ts               # Format definitions
 └── types.ts                   # TypeScript types

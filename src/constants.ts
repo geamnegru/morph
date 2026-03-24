@@ -1,20 +1,24 @@
 import type { AudioFormat, VideoFormat, FormatConfig, TextFormat, ImageFormat } from './types';
 
 export const audioInputFormats: AudioFormat[] = [
-  { id: 'mp3', name: 'MP3', ext: 'mp3', ffmpegCodec: 'mp3' },
-  { id: 'wav', name: 'WAV', ext: 'wav', ffmpegCodec: 'pcm_s16le' },
-  { id: 'aac', name: 'AAC', ext: 'm4a', ffmpegCodec: 'aac' },
+  { id: 'mp3',  name: 'MP3',  ext: 'mp3',  ffmpegCodec: 'mp3' },
+  { id: 'wav',  name: 'WAV',  ext: 'wav',  ffmpegCodec: 'pcm_s16le' },
+  { id: 'aac',  name: 'AAC',  ext: 'm4a',  ffmpegCodec: 'aac' },
+  { id: 'm4a',  name: 'M4A',  ext: 'm4a',  ffmpegCodec: 'aac' },
+  { id: 'ogg',  name: 'OGG',  ext: 'ogg',  ffmpegCodec: 'libvorbis' },
+  { id: 'opus', name: 'Opus', ext: 'opus', ffmpegCodec: 'libopus' },
   { id: 'flac', name: 'FLAC', ext: 'flac', ffmpegCodec: 'flac' },
-  { id: 'ogg', name: 'OGG', ext: 'ogg', ffmpegCodec: 'vorbis' }
+  { id: 'aiff', name: 'AIFF', ext: 'aiff', ffmpegCodec: 'pcm_s16be' },
+  { id: 'webm', name: 'WebM Audio', ext: 'webm', ffmpegCodec: 'libvorbis' },
 ];
 
 export const audioOutputFormats: AudioFormat[] = [
   { id: 'mp3', name: 'MP3', ext: 'mp3', ffmpegCodec: 'mp3', sampleRate: 44100 },
   { id: 'aac', name: 'AAC', ext: 'm4a', ffmpegCodec: 'aac', sampleRate: 44100 },
   { id: 'ogg', name: 'OGG Vorbis', ext: 'ogg', ffmpegCodec: 'libvorbis', sampleRate: 44100 },
-  { id: 'opus', name: 'Opus', ext: 'ogg', ffmpegCodec: 'opus', sampleRate: 48000 },  
   { id: 'flac', name: 'FLAC', ext: 'flac', ffmpegCodec: 'flac' },
-  { id: 'wav', name: 'WAV', ext: 'wav', ffmpegCodec: 'pcm_s16le', sampleRate: 44100 }
+  { id: 'opus', name: 'Opus', ext: 'webm', ffmpegCodec: 'libopus', sampleRate: 48000 },
+  { id: 'wav', name: 'WAV', ext: 'wav', ffmpegCodec: 'pcm_s16le', sampleRate: 44100 },
 ];
 
 
@@ -36,23 +40,20 @@ export const WEBM_MIME_CANDIDATES = [
 ];
 
 export const textInputFormats: TextFormat[] = [
-  { id: 'txt', name: 'TXT', ext: 'txt', accept: '.txt', mime: 'text/plain' },
-  { id: 'json', name: 'JSON', ext: 'json', accept: '.json', mime: 'application/json' },
-  { id: 'yaml', name: 'YAML', ext: 'yml', accept: '.yaml,.yml', mime: 'text/yaml' },
-  { id: 'log', name: 'LOG', ext: 'log', accept: '.log', mime: 'text/plain' },
-  { id: 'md', name: 'Markdown', ext: 'md', accept: '.md', mime: 'text/markdown' }
+  { id: 'txt',  name: 'TXT',      ext: 'txt',  accept: '.txt',       mime: 'text/plain' },
+  { id: 'json', name: 'JSON',     ext: 'json', accept: '.json',      mime: 'application/json' },
+  { id: 'yaml', name: 'YAML',     ext: 'yml',  accept: '.yaml,.yml', mime: 'text/yaml' },
+  { id: 'csv',  name: 'CSV',      ext: 'csv',  accept: '.csv',       mime: 'text/csv' },
+  { id: 'md',   name: 'Markdown', ext: 'md',   accept: '.md',        mime: 'text/markdown' },
+  { id: 'log',  name: 'LOG',      ext: 'log',  accept: '.log',       mime: 'text/plain' },
 ];
 
 export const textOutputFormats: TextFormat[] = [
-  { id: 'txt', name: 'TXT', ext: 'txt', accept: '.txt', mime: 'text/plain' },
-  { id: 'json', name: 'JSON', ext: 'json', accept: '.json', mime: 'application/json' },
-  { id: 'yaml', name: 'YAML', ext: 'yml', accept: '.yml', mime: 'text/yaml' },
-  { id: 'csv', name: 'CSV', ext: 'csv', accept: '.csv', mime: 'text/csv' },
-  { id: 'html', name: 'HTML', ext: 'html', accept: '.html', mime: 'text/html' },
-  { id: 'log', name: 'LOG', ext: 'log', accept: '.log', mime: 'text/plain' },
-  { id: 'md', name: 'MD', ext: 'md', accept: '.md', mime: 'text/markdown' },
-  { id: 'base64', name: 'Base64', ext: 'b64', accept: '.b64', mime: 'text/plain' },
-  { id: 'upper', name: 'UPPER', ext: 'txt', accept: '.txt', mime: 'text/plain' }
+  { id: 'txt',  name: 'TXT',      ext: 'txt',  accept: '.txt',  mime: 'text/plain' },
+  { id: 'json', name: 'JSON',     ext: 'json', accept: '.json', mime: 'application/json' },
+  { id: 'yaml', name: 'YAML',     ext: 'yml',  accept: '.yml',  mime: 'text/yaml' },
+  { id: 'csv',  name: 'CSV',      ext: 'csv',  accept: '.csv',  mime: 'text/csv' },
+  { id: 'md',   name: 'Markdown', ext: 'md',   accept: '.md',   mime: 'text/markdown' },
 ];
 
 export const imageInputFormats: ImageFormat[] = [

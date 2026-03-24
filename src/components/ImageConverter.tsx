@@ -1,186 +1,218 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
-import { encode } from '@jsquash/avif';
 import type { ImageFormat } from '../types';
-import { imageInputFormats, imageOutputFormats } from '../constants';
+import { imageOutputFormats } from '../constants';
+import { DropZone } from './DropZone';
+import { WorkerPool } from '../workers/workerPool';
+
+const formatBytes = (b: number) => {
+  if (b === 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return `${(b / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
+};
+
+const WORKER_POOL_SIZE = 4;
+
+const MIME_MAP: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  webp: 'image/webp',
+  avif: 'image/avif',
+};
+const QUALITY_MAP: Record<string, number> = {
+  png: 1,
+  jpg: 0.88,
+  webp: 0.90,
+  avif: 0.85,
+};
+
+type FileStatus = 'waiting' | 'converting' | 'done' | 'error';
+
+interface BatchFile {
+  id: string;
+  file: File;
+  status: FileStatus;
+  progress: number;
+  resultUrl: string | null;
+  resultSize: number | null;
+  error: string | null;
+}
+
+const triggerDownload = (url: string, filename: string) => {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
 
 export const ImageConverter = () => {
-  const [result, setResult] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [inputType, setInputType] = useState<ImageFormat>(imageInputFormats[0]);
   const [outputType, setOutputType] = useState<ImageFormat>(imageOutputFormats[2]);
   const [converting, setConverting] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [avifReady, setAvifReady] = useState(false);
-
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
-
-  const convertImage = async () => {
-    const fileInput = document.getElementById('imageFile') as HTMLInputElement;
-    const file = fileInput?.files?.[0];
-    if (!file) return;
-    setConverting(true); setProgress(0); setResult(null); setPreview(null);
-    try {
-      setProgress(10);
-      const dataUrl = await new Promise<string>((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result as string);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      setProgress(30);
-      const img = await new Promise<HTMLImageElement>((res, rej) => {
-        const i = new Image();
-        i.onload = () => res(i);
-        i.onerror = () => rej(new Error('Invalid image'));
-        i.src = dataUrl;
-      });
-      setProgress(50);
-      if (previewCanvasRef.current) {
-        const pCtx = previewCanvasRef.current.getContext('2d');
-        if (pCtx) {
-          const scale = Math.min(300 / img.width, 1);
-          previewCanvasRef.current.width = img.width * scale;
-          previewCanvasRef.current.height = img.height * scale;
-          pCtx.drawImage(img, 0, 0, previewCanvasRef.current.width, previewCanvasRef.current.height);
-          setPreview(previewCanvasRef.current.toDataURL());
-        }
-      }
-      setProgress(70);
-      if (canvasRef.current) {
-        const ctx = canvasRef.current.getContext('2d');
-        if (ctx) {
-          const scale = 0.85;
-          canvasRef.current.width = img.width * scale;
-          canvasRef.current.height = img.height * scale;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(img, 0, 0, canvasRef.current.width, canvasRef.current.height);
-          let out: string;
-          switch (outputType.id) {
-            case 'png': out = canvasRef.current.toDataURL('image/png', 0.95); break;
-            case 'jpg': out = canvasRef.current.toDataURL('image/jpeg', 0.88); break;
-            case 'webp':
-              out = canvasRef.current.toDataURL('image/webp', 0.90);
-              if (!out.startsWith('data:image/webp')) out = canvasRef.current.toDataURL('image/jpeg', 0.85);
-              break;
-            case 'avif':
-              if (avifReady) {
-                setProgress(85);
-                try {
-                  const imgData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
-                  const buf = await encode(imgData, { quality: 85, speed: 6 });
-                  const u8 = new Uint8Array(buf as ArrayBuffer);
-                  let bin = ''; for (let i = 0; i < u8.byteLength; i++) bin += String.fromCharCode(u8[i]);
-                  out = `data:image/avif;base64,${btoa(bin)}`;
-                } catch { out = canvasRef.current.toDataURL('image/webp', 0.88); }
-              } else {
-                out = canvasRef.current.toDataURL('image/avif', 0.85);
-                if (!out.startsWith('data:image/avif')) out = canvasRef.current.toDataURL('image/webp', 0.88);
-              }
-              break;
-            default: out = canvasRef.current.toDataURL('image/jpeg', 0.85);
-          }
-          setResult(out);
-          setProgress(100);
-        }
-      }
-    } catch (e) { console.error(e); }
-    finally { setConverting(false); setProgress(0); }
-  };
-
-  const download = () => {
-    if (!result) return;
-    const a = document.createElement('a');
-    a.href = result;
-    let ext = outputType.ext;
-    if (outputType.id === 'webp' && !result.includes('webp')) ext = 'jpg';
-    if (outputType.id === 'avif' && !result.includes('avif')) ext = 'webp';
-    a.download = `image-${Date.now()}.${ext}`;
-    a.click();
-  };
-
-  const clear = () => {
-    setResult(null); setPreview(null);
-    const fi = document.getElementById('imageFile') as HTMLInputElement;
-    if (fi) fi.value = '';
-  };
+  const [files, setFiles] = useState<BatchFile[]>([]);
+  const poolRef = useRef<WorkerPool | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const c = document.createElement('canvas'); c.width = 1; c.height = 1;
-        const ctx = c.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 1, 1);
-          await encode(ctx.getImageData(0, 0, 1, 1), { quality: 50, speed: 10 });
-          setAvifReady(true);
-        }
-      } catch { setAvifReady(false); }
-    })();
+    poolRef.current = new WorkerPool(
+      WORKER_POOL_SIZE,
+      () => new Worker(new URL('../workers/imageWorker.ts', import.meta.url), { type: 'module' })
+    );
+    return () => { poolRef.current?.terminate(); };
   }, []);
+
+  const updateFile = useCallback((id: string, patch: Partial<BatchFile>) => {
+    setFiles(prev => prev.map(f => f.id === id ? { ...f, ...patch } : f));
+  }, []);
+
+  const convertSingle = async (bf: BatchFile, outFmt: ImageFormat): Promise<void> => {
+    if (!poolRef.current) return;
+    updateFile(bf.id, { status: 'converting', progress: 10 });
+    try {
+      const { resultBlob, resultSize } = await poolRef.current.run(
+        bf.file,
+        bf.id,
+        MIME_MAP[outFmt.id] ?? 'image/webp',
+        QUALITY_MAP[outFmt.id] ?? 0.88,
+        (progress) => updateFile(bf.id, { progress })
+      );
+      const url = URL.createObjectURL(resultBlob);
+      updateFile(bf.id, { status: 'done', progress: 100, resultUrl: url, resultSize });
+    } catch (e: any) {
+      updateFile(bf.id, { status: 'error', progress: 0, error: e?.message ?? 'Failed' });
+    }
+  };
+
+  const convertAll = async () => {
+    const pending = files.filter(f => f.status === 'waiting' || f.status === 'error');
+    if (!pending.length) return;
+    setConverting(true);
+    await Promise.all(pending.map(f => convertSingle(f, outputType)));
+    setConverting(false);
+  };
+
+  const downloadAll = () => {
+    files.filter(f => f.resultUrl).forEach((f, i) => {
+      setTimeout(() => {
+        triggerDownload(
+          f.resultUrl!,
+          `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType.ext}`
+        );
+      }, i * 80);
+    });
+  };
+
+  const clearAll = () => {
+    files.forEach(f => { if (f.resultUrl) URL.revokeObjectURL(f.resultUrl); });
+    setFiles([]);
+  };
+
+  const removeFile = (id: string) => {
+    setFiles(prev => {
+      const f = prev.find(x => x.id === id);
+      if (f?.resultUrl) URL.revokeObjectURL(f.resultUrl);
+      return prev.filter(x => x.id !== id);
+    });
+  };
+
+  const addFiles = useCallback((incoming: File[]) => {
+    const newFiles: BatchFile[] = incoming.map(f => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file: f, status: 'waiting', progress: 0,
+      resultUrl: null, resultSize: null, error: null,
+    }));
+    setFiles(prev => [...prev, ...newFiles]);
+  }, []);
+
+  const doneCount = files.filter(f => f.status === 'done').length;
+  const pendingCount = files.filter(f => f.status === 'waiting' || f.status === 'error').length;
 
   return (
     <div className="card">
       <div className="format-row">
-        <div>
-          <label className="label">From</label>
-          <select className="select" value={inputType.id}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-              setInputType(imageInputFormats.find(f => f.id === e.target.value)!);
-              setResult(null); setPreview(null);
-            }} disabled={converting}>
-            {imageInputFormats.map(f => <option key={f.id} value={f.id}>{f.name.toUpperCase()}</option>)}
-          </select>
-        </div>
-        <div className="format-arrow">→</div>
-        <div>
-          <label className="label">To</label>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <label className="label">Output format</label>
           <select className="select" value={outputType.id}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-              setOutputType(imageOutputFormats.find(f => f.id === e.target.value)!);
-              setResult(null);
-            }} disabled={converting}>
+            onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+              setOutputType(imageOutputFormats.find(f => f.id === e.target.value)!)
+            } disabled={converting}>
             {imageOutputFormats.map(f => <option key={f.id} value={f.id}>{f.name.toUpperCase()}</option>)}
           </select>
         </div>
       </div>
 
       <div>
-        <label className="label">File</label>
-        <input id="imageFile" type="file" className="file-input"
-          accept={inputType.accept} disabled={converting} />
+        <label className="label">Add files</label>
+        <DropZone
+          accept=".png,.jpg,.jpeg,.webp,.avif,.gif,.bmp,.tiff"
+          multiple disabled={converting}
+          hint="PNG, JPG, WebP, AVIF, GIF, BMP, TIFF"
+          onFiles={addFiles}
+        />
       </div>
 
-      <button className="btn-primary" onClick={convertImage} disabled={converting}>
-        {converting ? `Converting… ${progress}%` : 'Convert'}
-      </button>
-
-      {converting && (
-        <div className="progress-wrap">
-          <div className="progress-fill" style={{ width: `${progress}%` }} />
+      {files.length > 0 && (
+        <div className="batch-file-list">
+          {files.map(f => (
+            <div key={f.id} className={`batch-file-item batch-file-item--${f.status}`}>
+              <div className="batch-file-name" title={f.file.name}>{f.file.name}</div>
+              <div className="batch-file-size">{formatBytes(f.file.size)}</div>
+              {f.status === 'converting' && (
+                <div className="batch-file-progress">
+                  <div className="batch-file-progress-fill" style={{ width: `${f.progress}%` }} />
+                </div>
+              )}
+              {f.status === 'done' && f.resultSize !== null && (
+                <div className="batch-file-size" style={{ color: '#16A34A' }}>
+                  → {formatBytes(f.resultSize)}
+                </div>
+              )}
+              <div className={`batch-file-status batch-file-status--${f.status}`}>
+                {f.status === 'error' ? (f.error ?? 'error') : f.status}
+              </div>
+              {f.resultUrl && (
+                <button
+                  className="batch-download-btn"
+                  style={{ padding: '4px 10px', fontSize: '11px' }}
+                  onClick={() => triggerDownload(f.resultUrl!, `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType.ext}`)}>
+                  ↓
+                </button>
+              )}
+              {!converting && (
+                <button onClick={() => removeFile(f.id)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BBBBBB', fontSize: '14px', padding: '0 2px' }}>
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
-      {preview && (
-        <div>
-          <span className="preview-label">Preview</span>
-          <canvas ref={previewCanvasRef} className="preview-canvas" />
+      {files.length > 0 && (
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button className="btn-primary" style={{ flex: 1 }}
+            onClick={convertAll} disabled={converting || pendingCount === 0}>
+            {converting
+              ? `Converting… (${doneCount}/${doneCount + pendingCount})`
+              : `Convert ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`}
+          </button>
+          {doneCount > 0 && (
+            <button className="batch-download-btn" onClick={downloadAll}>
+              ↓ All ({doneCount})
+            </button>
+          )}
+          <button className="btn-ghost" onClick={clearAll} disabled={converting}>Clear</button>
         </div>
       )}
 
-      {result && (
-        <div className="result-section">
-          <div className="badge badge--success">Conversion complete</div>
-          <img src={result} alt="Result" className="result-image" />
-          <div className="btn-row">
-            <button onClick={download} className="btn-download">Download</button>
-            <button onClick={clear} className="btn-ghost">Convert another</button>
-          </div>
-        </div>
+      {files.length === 0 && (
+        <p style={{ margin: 0, fontSize: '13px', color: '#BBBBBB', textAlign: 'center', padding: '8px 0' }}>
+          Add files above to get started
+        </p>
       )}
-
-      <canvas ref={canvasRef} style={{ display: 'none' }} width={1024} height={768} />
     </div>
   );
 };

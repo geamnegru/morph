@@ -2,10 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Muxer, ArrayBufferTarget } from 'webm-muxer';
 import * as MP4Box from 'mp4box';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile } from '@ffmpeg/util';
+import { DropZone } from './DropZone';
 import type {
   VideoFormat,
-  HTMLVideoElementWithCapture,
   DemuxedAudioSample,
   AudioTrack,
   DemuxedSample,
@@ -13,7 +12,7 @@ import type {
   WebCodecsRuntime,
   EncodedChunkRecord,
 } from '../types';
-import { FORMATS, WEBM_MIME_CANDIDATES, COPY_COMPATIBLE_FORMATS } from '../constants';
+import { FORMATS, COPY_COMPATIBLE_FORMATS } from '../constants';
 
 
 async function getWebCodecsRuntime(args: {
@@ -172,38 +171,6 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 };
 
-const formatDuration = (seconds: number): string => {
-  if (!Number.isFinite(seconds) || seconds < 0) return '-';
-
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-
-  if (mins === 0) return `${secs.toFixed(2)}s`;
-  return `${mins}m ${secs.toFixed(2)}s`;
-};
-
-const formatMs = (ms: number): string => {
-  if (!Number.isFinite(ms) || ms < 0) return '-';
-  return `${(ms / 1000).toFixed(2)}s`;
-};
-
-const getFileExtension = (fileName: string): string => {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  return ext || 'mp4';
-};
-
-const pickSupportedWebmMimeType = (): string | null => {
-  if (typeof MediaRecorder === 'undefined') return null;
-
-  for (const mime of WEBM_MIME_CANDIDATES) {
-    if (MediaRecorder.isTypeSupported(mime)) {
-      return mime;
-    }
-  }
-
-  return null;
-};
-
 const buildFFmpegCommand = (
   inputName: string,
   outputName: string,
@@ -242,24 +209,6 @@ const buildFFmpegCommand = (
 
 function normalizeMp4Codec(codec: string): string {
   return (codec || '').trim().toLowerCase();
-}
-
-function isAvcCodec(codec: string): boolean {
-  const c = normalizeMp4Codec(codec);
-  return c.startsWith('avc1') || c.startsWith('avc3');
-}
-
-function isVpCodec(codec: string): boolean {
-  const c = normalizeMp4Codec(codec);
-  return c.startsWith('vp08') || c.startsWith('vp8') || c.startsWith('vp09') || c.startsWith('vp9');
-}
-
-function isAv1Codec(codec: string): boolean {
-  return normalizeMp4Codec(codec).startsWith('av01');
-}
-
-function isDecoderCompatibleMp4Codec(codec: string): boolean {
-  return isAvcCodec(codec) || isVpCodec(codec) || isAv1Codec(codec);
 }
 
 function serializeMp4BoxPayload(box: any): Uint8Array | undefined {
@@ -683,56 +632,6 @@ async function muxWebMFromEncodedChunks(args: {
   return new Blob([buffer], { type: 'video/webm' });
 }
 
-async function canUseWebCodecsForMp4ToWebm(file: File): Promise<boolean> {
-  try {
-    const { videoTrack, videoSamples } = await demuxMp4(file);
-
-    if (!videoTrack) {
-      console.warn('[WebCodecs gate] Nu există track video');
-      return false;
-    }
-
-    if (!videoSamples.length) {
-      console.warn('[WebCodecs gate] Nu există sample-uri video');
-      return false;
-    }
-
-    if (!videoSamples[0].isSync) {
-      console.warn('[WebCodecs gate] Primul sample video nu este keyframe');
-      return false;
-    }
-
-    if (!isDecoderCompatibleMp4Codec(videoTrack.codec)) {
-      console.warn('[WebCodecs gate] Codec video MP4 neacoperit pentru decoder path:', videoTrack.codec);
-      return false;
-    }
-
-    if (isAvcCodec(videoTrack.codec) && !videoTrack.description?.byteLength) {
-      console.warn('[WebCodecs gate] AVC/H.264 fără description extras din MP4 -> fallback');
-      return false;
-    }
-
-    // Verificăm cu isConfigSupported dacă browserul poate decoda acest codec
-    // Mai rapid decât un decode test real și nu are probleme de timeout
-    const decoderCheck = await VideoDecoder.isConfigSupported({
-      codec: videoTrack.codec,
-      codedWidth: videoTrack.width,
-      codedHeight: videoTrack.height,
-      hardwareAcceleration: 'no-preference',
-    });
-
-    if (!decoderCheck.supported) {
-      console.warn('[WebCodecs gate] VideoDecoder.isConfigSupported -> false pentru:', videoTrack.codec);
-      return false;
-    }
-
-    return true;
-  } catch (err) {
-    console.warn('[WebCodecs gate] verificarea a eșuat -> fallback', err);
-    return false;
-  }
-}
-
 // MessageChannel yield — mult mai rapid decât setTimeout(fn, 0/1)
 // Cedează controlul browserului fără delay artificial
 function yieldToEventLoop(): Promise<void> {
@@ -811,13 +710,17 @@ function getTargetWebCodecsBitrate(args: {
     minBitrate = 8_000_000;
   }
 
-  // Bitrate maxim: sursă × 1.3 (VP8 are nevoie de ~30% mai mult decât H.264)
-  // Nu are sens să depășim mult bitrate-ul sursei — fișierul devine mai mare
-  // fără câștig real de calitate
-  const sourceBasedMax = Math.round(args.sourceBitrateKbps * 1000 * 1.3);
+  // Cap absolut per rezoluție — dincolo de asta VP8 nu câștigă calitate
+  let cap: number;
+  if (pixels <= 640 * 360)       cap = 1_500_000;
+  else if (pixels <= 1280 * 720) cap = 4_000_000;
+  else if (pixels <= 1920 * 1080) cap = 8_000_000;
+  else                            cap = 12_000_000; // 4K VP8 max decent
 
-  // Clampăm între minim decent și sursa × 1.3
-  return Math.max(minBitrate, Math.min(sourceBasedMax, minBitrate * 3));
+  // Bitrate țintă: sursă × 0.8 (VP8 e mai puțin eficient dar nu are sens să depășim sursa)
+  const sourceBasedTarget = Math.round(args.sourceBitrateKbps * 1000 * 0.8);
+
+  return Math.max(minBitrate, Math.min(sourceBasedTarget, cap));
 }
 
 async function convertMp4ToWebmWithWebCodecs(args: {
@@ -1173,664 +1076,198 @@ async function convertMp4ToWebmWithWebCodecs(args: {
 
 export const VideoConverter: React.FC = () => {
   const [isLoadingEngine, setIsLoadingEngine] = useState(true);
-  const [isConverting, setIsConverting] = useState(false);
   const [isReady, setIsReady] = useState(false);
 
   const [inputType, setInputType] = useState<VideoFormat>('mp4');
   const [outputType, setOutputType] = useState<VideoFormat>('webm');
 
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-
-  const [resultUrl, setResultUrl] = useState<string | null>(null);
-  const [resultSize, setResultSize] = useState<number | null>(null);
-  const [engineUsed, setEngineUsed] = useState<'ffmpeg' | 'mediarecorder' | 'webcodecs' | null>(null);
-
-  const [conversionTimeMs, setConversionTimeMs] = useState<number | null>(null);
-  const [sourceFrameCount, setSourceFrameCount] = useState<number | null>(null);
-  const [sourceDurationSec, setSourceDurationSec] = useState<number | null>(null);
-  const [sourceFps, setSourceFps] = useState<number | null>(null);
-
   const ffmpegRef = useRef<FFmpeg | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaChunksRef = useRef<Blob[]>([]);
-  const inputPreviewUrlRef = useRef<string | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
 
   const videoFormats = useMemo(() => Object.keys(FORMATS) as VideoFormat[], []);
-  const supportedWebmMimeType = useMemo(() => pickSupportedWebmMimeType(), []);
-
-  const resetResult = useCallback(() => {
-    setConversionTimeMs(null);
-    setEngineUsed(null);
-
-    setResultUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
-
-    setResultSize(null);
-  }, []);
-
-  const stopMediaRecorderResources = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== 'inactive') {
-      try {
-        recorder.stop();
-      } catch {}
-    }
-
-    mediaRecorderRef.current = null;
-
-    if (mediaStreamRef.current) {
-      for (const track of mediaStreamRef.current.getTracks()) {
-        track.stop();
-      }
-      mediaStreamRef.current = null;
-    }
-
-    if (audioContextRef.current) {
-      try {
-        void audioContextRef.current.close();
-      } catch {}
-      audioContextRef.current = null;
-    }
-
-    mediaChunksRef.current = [];
-  }, []);
 
   useEffect(() => {
     const initFFmpeg = async () => {
       try {
         const ffmpeg = new FFmpeg();
-
-        ffmpeg.on('log', ({ message }) => {
-          console.log('[FFmpeg]', message);
+        ffmpeg.on('log', ({ message }) => { console.log('[FFmpeg]', message); });
+        const { toBlobURL } = await import('@ffmpeg/util');
+        const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm';
+        await ffmpeg.load({
+          coreURL:   await toBlobURL(`${baseURL}/ffmpeg-core.js`,        'text/javascript'),
+          wasmURL:   await toBlobURL(`${baseURL}/ffmpeg-core.wasm`,      'application/wasm'),
+          workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
         });
-
-        ffmpeg.on('progress', ({ progress: nextProgress }) => {
-          const percent = Math.max(0, Math.min(100, Math.round(nextProgress * 100)));
-          setProgress((prev) => {
-            // Dacă suntem în faza audio mux (prev >= 85), mapăm progresul FFmpeg în 87–99%
-            if (prev >= 85) return Math.max(prev, Math.round(87 + nextProgress * 12));
-            // Conversie FFmpeg completă: folosim direct
-            return percent;
-          });
-        });
-
-        await ffmpeg.load();
-
         ffmpegRef.current = ffmpeg;
         setIsReady(true);
       } catch (err) {
-        console.error(err);
-        setError('FFmpeg nu s-a putut încărca.');
+        console.error('[FFmpeg load failed]', err);
       } finally {
         setIsLoadingEngine(false);
       }
     };
 
     void initFFmpeg();
-
-    return () => {
-      resetResult();
-      stopMediaRecorderResources();
-
-      if (inputPreviewUrlRef.current) {
-        URL.revokeObjectURL(inputPreviewUrlRef.current);
-        inputPreviewUrlRef.current = null;
-      }
-    };
-  }, [resetResult, stopMediaRecorderResources]);
+  }, []);
 
   const handleInputTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const nextType = e.target.value as VideoFormat;
     setInputType(nextType);
     setOutputType(nextType);
-    setError(null);
-    resetResult();
-  }, [resetResult]);
+  }, []);
 
   const handleOutputTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const nextType = e.target.value as VideoFormat;
     setOutputType(nextType);
-    setError(null);
-    resetResult();
-  }, [resetResult]);
+  }, []);
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    setSelectedFile(file);
-    setError(null);
-    setProgress(0);
-    resetResult();
+  // ── Batch state ────────────────────────────────────────────────────────────
+  type VideoBatchStatus = 'waiting' | 'converting' | 'done' | 'error';
+  interface VideoBatchFile {
+    id: string;
+    file: File;
+    inFmt: VideoFormat;
+    status: VideoBatchStatus;
+    progress: number;
+    resultUrl: string | null;
+    resultSize: number | null;
+    error: string | null;
+  }
 
-    stopMediaRecorderResources();
+  const [batchFiles, setBatchFiles] = useState<VideoBatchFile[]>([]);
+  const [batchConverting, setBatchConverting] = useState(false);
 
-    if (inputPreviewUrlRef.current) {
-      URL.revokeObjectURL(inputPreviewUrlRef.current);
-      inputPreviewUrlRef.current = null;
-    }
+  const updateBatchFile = useCallback((id: string, patch: Partial<VideoBatchFile>) => {
+    setBatchFiles(prev => prev.map(f => f.id === id ? { ...f, ...patch } : f));
+  }, []);
 
-    if (!file) {
-      setSourceDurationSec(null);
-      setSourceFps(null);
-      setSourceFrameCount(null);
-      return;
-    }
+  // Conversie single pentru batch
+  const convertBatchSingle = useCallback(async (bf: VideoBatchFile): Promise<void> => {
+    updateBatchFile(bf.id, { status: 'converting', progress: 0 });
 
-    const ext = getFileExtension(file.name);
-    const normalizedInputType = (videoFormats.includes(ext as VideoFormat) ? ext : 'mp4') as VideoFormat;
-    setInputType(normalizedInputType);
+    const file = bf.file;
+    const ext = (file.name.split('.').pop()?.toLowerCase() ?? 'mp4') as VideoFormat;
+    const inFmt: VideoFormat = (Object.keys(FORMATS) as VideoFormat[]).includes(ext) ? ext : 'mp4';
+    const onProgress = (p: number) => updateBatchFile(bf.id, { progress: p });
 
-    const previewUrl = URL.createObjectURL(file);
-    inputPreviewUrlRef.current = previewUrl;
+    try {
+      let meta = { durationSec: 0, fps: null as number | null, frameCount: null as number | null };
+      try { meta = await getVideoMetadata(file); } catch {}
 
-    void (async () => {
-      try {
-        const meta = await getVideoMetadata(file);
+      const fps = meta.fps != null ? Math.max(1, Math.round(meta.fps)) : 30;
+      let blob: Blob | null = null;
 
-        setSourceDurationSec(meta.durationSec);
-        setSourceFps(meta.fps);
-        setSourceFrameCount(meta.frameCount);
-
-        console.log('[Video metadata]', {
-          fileName: file.name,
-          sizeBytes: file.size,
-          sizeHuman: formatBytes(file.size),
-          durationSec: meta.durationSec,
-          durationHuman: formatDuration(meta.durationSec),
-          fpsEstimated: meta.fps,
-          frameCountEstimated: meta.frameCount,
-        });
-      } catch (err) {
-        console.warn('[Video metadata] indisponibilă:', err);
-        setSourceDurationSec(null);
-        setSourceFps(null);
-        setSourceFrameCount(null);
-      }
-    })();
-  }, [resetResult, stopMediaRecorderResources, videoFormats]);
-
-  const clearAll = useCallback(() => {
-    setSelectedFile(null);
-    setError(null);
-    setProgress(0);
-    resetResult();
-    stopMediaRecorderResources();
-
-    if (inputPreviewUrlRef.current) {
-      URL.revokeObjectURL(inputPreviewUrlRef.current);
-      inputPreviewUrlRef.current = null;
-    }
-
-    if (previewVideoRef.current) {
-      previewVideoRef.current.removeAttribute('src');
-      previewVideoRef.current.load();
-    }
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-
-    setSourceFrameCount(null);
-    setSourceDurationSec(null);
-    setSourceFps(null);
-    setConversionTimeMs(null);
-  }, [resetResult, stopMediaRecorderResources]);
-
-  const convertWithWebCodecs = useCallback(async (): Promise<boolean> => {
-    if (!selectedFile) return false;
-    if (inputType !== 'mp4' || outputType !== 'webm') return false;
-
-    setProgress(0);
-
-    const wcResult = await convertMp4ToWebmWithWebCodecs({
-      file: selectedFile,
-      codec: 'vp8',
-      framerate: sourceFps != null ? Math.max(1, Math.round(sourceFps)) : 30,
-      durationSec: sourceDurationSec ?? 0,
-      onProgress: (p) => {
-        setProgress(Math.round(p * 100));
-      },
-    });
-
-    // Audio e deja encodat și muxat în wcResult.blob via WebCodecs AudioEncoder
-    // Nu mai avem nevoie de FFmpeg pentru audio
-    const finalBlob = wcResult.blob;
-
-    const url = URL.createObjectURL(finalBlob);
-    setResultUrl(url);
-    setResultSize(finalBlob.size);
-    setEngineUsed('webcodecs');
-    setProgress(100);
-
-    console.log('[Conversion output]', {
-      engine: 'webcodecs',
-      audioMuxed: wcResult.hasAudio,
-      runtimeMode: wcResult.runtimeMode,
-      outputSizeBytes: finalBlob.size,
-      outputSizeHuman: formatBytes(finalBlob.size),
-      outputType: 'webm',
-      width: wcResult.width,
-      height: wcResult.height,
-      frameCount: wcResult.frameCount,
-    });
-
-    return true;
-  }, [selectedFile, inputType, outputType, sourceFps, isReady]);
-
-  const convertWithMediaRecorder = useCallback(async (): Promise<boolean> => {
-    if (!selectedFile) return false;
-    if (inputType !== 'mp4' || outputType !== 'webm') return false;
-    if (!supportedWebmMimeType) return false;
-
-    const video = previewVideoRef.current;
-    if (!video) return false;
-
-    const inputUrl = inputPreviewUrlRef.current;
-    if (!inputUrl) return false;
-
-    setProgress(0);
-
-    stopMediaRecorderResources();
-
-    video.pause();
-    video.currentTime = 0;
-    video.muted = true;
-    video.defaultMuted = true;
-    video.volume = 0;
-    video.playsInline = true;
-    video.crossOrigin = 'anonymous';
-    video.src = inputUrl;
-
-    await new Promise<void>((resolve, reject) => {
-      const onLoadedMetadata = () => {
-        cleanup();
-        resolve();
-      };
-
-      const onError = () => {
-        cleanup();
-        reject(new Error('Nu am putut încărca video-ul pentru conversia rapidă.'));
-      };
-
-      const cleanup = () => {
-        video.removeEventListener('loadedmetadata', onLoadedMetadata);
-        video.removeEventListener('error', onError);
-      };
-
-      video.addEventListener('loadedmetadata', onLoadedMetadata);
-      video.addEventListener('error', onError);
-      video.load();
-    });
-
-    const mediaVideo = video as HTMLVideoElementWithCapture;
-    const captureStreamFn = mediaVideo.captureStream ?? mediaVideo.mozCaptureStream;
-
-    if (!captureStreamFn) {
-      throw new Error('captureStream() nu este disponibil în acest browser.');
-    }
-
-    const capturedStream = captureStreamFn.call(video) as MediaStream;
-    const combinedStream = new MediaStream();
-
-    for (const track of capturedStream.getVideoTracks()) {
-      combinedStream.addTrack(track);
-    }
-
-    const AudioContextCtor =
-      (window as any).AudioContext || (window as any).webkitAudioContext;
-
-    if (!AudioContextCtor) {
-      throw new Error('AudioContext nu este disponibil pentru fallback-ul MediaRecorder.');
-    }
-
-    const audioContext = new AudioContextCtor();
-    audioContextRef.current = audioContext;
-
-    const sourceNode = audioContext.createMediaElementSource(video);
-    const destinationNode = audioContext.createMediaStreamDestination();
-
-    sourceNode.connect(destinationNode);
-
-    for (const track of destinationNode.stream.getAudioTracks()) {
-      combinedStream.addTrack(track);
-    }
-
-    if (!combinedStream.getAudioTracks().length) {
-      throw new Error('Nu am putut captura audio pentru MediaRecorder fallback.');
-    }
-
-    mediaStreamRef.current = combinedStream;
-    mediaChunksRef.current = [];
-
-    const recorder = new MediaRecorder(combinedStream, {
-      mimeType: supportedWebmMimeType,
-      videoBitsPerSecond: 1_200_000,
-      audioBitsPerSecond: 128_000,
-    });
-
-    mediaRecorderRef.current = recorder;
-
-    recorder.ondataavailable = (event: BlobEvent) => {
-      if (event.data && event.data.size > 0) {
-        mediaChunksRef.current.push(event.data);
-      }
-    };
-
-    recorder.onerror = (event) => {
-      console.error('[MediaRecorder error]', event);
-      setError('MediaRecorder a dat eroare în timpul conversiei rapide.');
-    };
-
-    const resultPromise = new Promise<void>((resolve, reject) => {
-      recorder.onstop = () => {
+      // ── WebCodecs path (MP4→WebM) ──────────────────────────────────────────
+      // Sărăm canUseWebCodecsForMp4ToWebm — face un demux inutil (extra read 16MB)
+      // Încercăm direct WebCodecs și fallback la FFmpeg dacă pică
+      if (inFmt === 'mp4' && outputType === 'webm') {
         try {
-          const blob = new Blob(mediaChunksRef.current, { type: supportedWebmMimeType });
-
-          if (blob.size === 0) {
-            throw new Error('Rezultatul MediaRecorder este gol.');
-          }
-
-          const url = URL.createObjectURL(blob);
-
-          setResultUrl(url);
-          setResultSize(blob.size);
-          setEngineUsed('mediarecorder');
-          setProgress(100);
-
-          console.log('[Conversion output]', {
-            engine: 'mediarecorder',
-            outputSizeBytes: blob.size,
-            outputSizeHuman: formatBytes(blob.size),
-            outputType: 'webm',
+          console.log('[Batch] WebCodecs start:', file.name, '| fps:', fps, '| durationSec:', meta.durationSec);
+          const wcResult = await convertMp4ToWebmWithWebCodecs({
+            file, codec: 'vp8', framerate: fps,
+            durationSec: meta.durationSec,
+            onProgress: p => onProgress(Math.round(p * 100)),
           });
-
-          resolve();
-        } catch (err) {
-          reject(err);
-        } finally {
-          stopMediaRecorderResources();
+          blob = wcResult.blob;
+          console.log('[Batch] WebCodecs done:', formatBytes(blob.size));
+        } catch (e) {
+          console.warn('[Batch] WebCodecs failed, falling back to FFmpeg:', e);
         }
-      };
-    });
-
-    const endedPromise = new Promise<void>((resolve, reject) => {
-      const onEnded = () => {
-        cleanup();
-        resolve();
-      };
-
-      const onError = () => {
-        cleanup();
-        reject(new Error('Video playback a eșuat în timpul conversiei rapide.'));
-      };
-
-      const cleanup = () => {
-        video.removeEventListener('ended', onEnded);
-        video.removeEventListener('error', onError);
-      };
-
-      video.addEventListener('ended', onEnded);
-      video.addEventListener('error', onError);
-    });
-
-    recorder.start(1000);
-    setEngineUsed('mediarecorder');
-    setProgress(15);
-
-    try {
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-      }
-      await video.play();
-    } catch (err) {
-      console.error('[MediaRecorder play failed]', err);
-      throw new Error('Browserul a blocat redarea video necesară pentru conversia rapidă.');
-    }
-
-    const progressInterval = window.setInterval(() => {
-      if (!video.duration || !Number.isFinite(video.duration)) return;
-      const percent = Math.max(0, Math.min(99, Math.round((video.currentTime / video.duration) * 100)));
-      setProgress(percent);
-    }, 150);
-
-    try {
-      await endedPromise;
-
-      if (recorder.state !== 'inactive') {
-        recorder.stop();
       }
 
-      await resultPromise;
-      return true;
-    } catch (err) {
-      if (recorder.state !== 'inactive') {
-        try {
-          recorder.stop();
-        } catch {}
-      }
-      throw err;
-    } finally {
-      window.clearInterval(progressInterval);
-      video.pause();
-      video.currentTime = 0;
-    }
-  }, [
-    inputType,
-    outputType,
-    selectedFile,
-    stopMediaRecorderResources,
-    supportedWebmMimeType,
-  ]);
-
-  const convertWithFFmpeg = useCallback(async () => {
-    if (!selectedFile) {
-      setError('Selectează un fișier video.');
-      return;
-    }
-
-    if (!ffmpegRef.current || !isReady || isLoadingEngine) {
-      setError('FFmpeg nu este gata încă.');
-      return;
-    }
-
-    const ffmpeg = ffmpegRef.current;
-    const inputExt = getFileExtension(selectedFile.name);
-    const inputName = `input.${inputExt}`;
-    const outputName = `output.${outputType}`;
-
-    try {
-      const fileData = await fetchFile(selectedFile);
-
-      setEngineUsed('ffmpeg');
-      await ffmpeg.writeFile(inputName, fileData);
-
-      const command = buildFFmpegCommand(inputName, outputName, outputType);
-      await ffmpeg.exec(command);
-
-      const outputData = await ffmpeg.readFile(outputName);
-
-      if (typeof outputData === 'string') {
-        throw new Error('Expected binary output from FFmpeg, but received text.');
+      // ── FFmpeg path ────────────────────────────────────────────────────────
+      if (!blob) {
+        if (!ffmpegRef.current || !isReady) throw new Error('FFmpeg not ready.');
+        const ffmpeg = ffmpegRef.current;
+        ffmpeg.on('progress', ({ progress: p }) => onProgress(Math.max(0, Math.min(100, Math.round(p * 100)))));
+        const { fetchFile } = await import('@ffmpeg/util');
+        const inputName  = `b_in_${bf.id}.${inFmt}`;
+        const outputName = `b_out_${bf.id}.${outputType}`;
+        await ffmpeg.writeFile(inputName, await fetchFile(file));
+        await ffmpeg.exec(buildFFmpegCommand(inputName, outputName, outputType));
+        const data = await ffmpeg.readFile(outputName);
+        if (typeof data === 'string') throw new Error('Unexpected FFmpeg output');
+        const bytes = new Uint8Array(data.byteLength);
+        bytes.set(data);
+        blob = new Blob([bytes], { type: FORMATS[outputType].mimeType });
+        try { await ffmpeg.deleteFile(inputName); } catch {}
+        try { await ffmpeg.deleteFile(outputName); } catch {}
       }
 
-      const safeBytes = new Uint8Array(outputData.byteLength);
-      safeBytes.set(outputData);
-
-      const blob = new Blob([safeBytes], {
-        type: FORMATS[outputType].mimeType,
-      });
-
+      if (!blob || blob.size === 0) throw new Error('Output is empty.');
       const url = URL.createObjectURL(blob);
-
-      setResultUrl(url);
-      setResultSize(blob.size);
-      setProgress(100);
-
-      console.log('[Conversion output]', {
-        engine: 'ffmpeg',
-        outputSizeBytes: blob.size,
-        outputSizeHuman: formatBytes(blob.size),
-        outputType,
-      });
-    } finally {
-      try {
-        await ffmpeg.deleteFile(inputName);
-      } catch {}
-
-      try {
-        await ffmpeg.deleteFile(outputName);
-      } catch {}
+      updateBatchFile(bf.id, { status: 'done', progress: 100, resultUrl: url, resultSize: blob.size });
+    } catch (e: any) {
+      updateBatchFile(bf.id, { status: 'error', error: e?.message ?? 'Failed' });
     }
-  }, [selectedFile, isReady, isLoadingEngine, outputType]);
+  }, [outputType, isReady, updateBatchFile]);
 
-  const convertFile = useCallback(async () => {
-    if (!selectedFile) {
-      setError('Selectează un fișier video.');
-      return;
+  const batchFilesRef = useRef<VideoBatchFile[]>([]);
+  // Sync ref cu state ca să avem acces în closure fără stale data
+  useEffect(() => { batchFilesRef.current = batchFiles; }, [batchFiles]);
+
+  const convertBatchAll = useCallback(async () => {
+    const pending = batchFilesRef.current.filter(f => f.status === 'waiting' || f.status === 'error');
+    if (!pending.length) return;
+    setBatchConverting(true);
+
+    // Procesăm secvențial — 2 instanțe WebCodecs simultane pe GPU cauzează DecodingError
+    // Mai ales pentru fișiere 4K unde GPU-ul nu poate ține 2 decode+encode în paralel
+    for (const f of pending) {
+      await convertBatchSingle(f);
     }
+    setBatchConverting(false);
+  }, [convertBatchSingle]);
 
-    setIsConverting(true);
-    setError(null);
-    setProgress(0);
-    resetResult();
-
-    const startedAt = performance.now();
-
-    console.log('[Conversion started]', {
-      fileName: selectedFile.name,
-      inputType,
-      outputType,
-      inputSizeBytes: selectedFile.size,
-      inputSizeHuman: formatBytes(selectedFile.size),
-      sourceDurationSec,
-      sourceDurationHuman: sourceDurationSec !== null ? formatDuration(sourceDurationSec) : null,
-      sourceFpsEstimated: sourceFps,
-      sourceFrameCountEstimated: sourceFrameCount,
+  const removeBatchFile = useCallback((id: string) => {
+    setBatchFiles(prev => {
+      const f = prev.find(x => x.id === id);
+      if (f?.resultUrl) URL.revokeObjectURL(f.resultUrl);
+      return prev.filter(x => x.id !== id);
     });
+  }, []);
 
-    try {
-      const shouldUseFastPath = inputType === 'mp4' && outputType === 'webm';
+  const clearBatch = useCallback(() => {
+    setBatchFiles(prev => { prev.forEach(f => { if (f.resultUrl) URL.revokeObjectURL(f.resultUrl); }); return []; });
+  }, []);
 
-      if (shouldUseFastPath) {
-        let webCodecsGatePassed = false;
+  const triggerDownload = useCallback((url: string, filename: string) => {
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }, []);
 
-        try {
-          const canUseWebCodecs = await canUseWebCodecsForMp4ToWebm(selectedFile);
-          webCodecsGatePassed = canUseWebCodecs;
+  const downloadBatchAll = useCallback(() => {
+    batchFiles.filter(f => f.resultUrl).forEach((f, i) => {
+      setTimeout(() => {
+        triggerDownload(
+          f.resultUrl!,
+          `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType}`
+        );
+      }, i * 80);
+    });
+  }, [batchFiles, outputType, triggerDownload]);
 
-          if (canUseWebCodecs) {
-            const wcWorked = await convertWithWebCodecs();
-            if (wcWorked) {
-              const elapsedMs = performance.now() - startedAt;
-              setConversionTimeMs(elapsedMs);
+  const batchDoneCount = batchFiles.filter(f => f.status === 'done').length;
+  const batchPendingCount = batchFiles.filter(f => f.status === 'waiting' || f.status === 'error').length;
 
-              console.log('[Conversion finished]', {
-                engine: 'webcodecs',
-                elapsedMs,
-                elapsedHuman: formatMs(elapsedMs),
-              });
-
-              return;
-            }
-          }
-        } catch (webCodecsError) {
-          console.warn('[WebCodecs skipped/failed]', webCodecsError);
-          setProgress(5);
-        }
-
-        // Sărim MediaRecorder dacă gate check-ul a eșuat (ex: YUV444, format nesuportat)
-        // În acest caz browserul nu poate reda fișierul nici în <video> — MediaRecorder
-        // ar rămâne blocat la 15% fără eroare
-        if (webCodecsGatePassed) {
-          try {
-            const fastWorked = await convertWithMediaRecorder();
-            if (fastWorked) {
-              const elapsedMs = performance.now() - startedAt;
-              setConversionTimeMs(elapsedMs);
-
-              console.log('[Conversion finished]', {
-                engine: 'mediarecorder',
-                elapsedMs,
-                elapsedHuman: formatMs(elapsedMs),
-              });
-
-              return;
-            }
-          } catch (fastError) {
-            console.warn('[MediaRecorder failed]', fastError);
-            setProgress(5);
-          }
-        } else {
-          console.log('[Orchestrator] Gate check eșuat -> sar MediaRecorder -> direct FFmpeg');
-          setProgress(5);
-        }
-      }
-
-      await convertWithFFmpeg();
-
-      const elapsedMs = performance.now() - startedAt;
-      setConversionTimeMs(elapsedMs);
-
-      console.log('[Conversion finished]', {
-        engine: 'ffmpeg',
-        elapsedMs,
-        elapsedHuman: formatMs(elapsedMs),
-      });
-    } catch (err) {
-      console.error('[Conversion failed]', err);
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Conversia a eșuat.'
-      );
-    } finally {
-      setIsConverting(false);
-    }
-  }, [
-    selectedFile,
-    inputType,
-    outputType,
-    resetResult,
-    convertWithWebCodecs,
-    convertWithMediaRecorder,
-    convertWithFFmpeg,
-    sourceDurationSec,
-    sourceFps,
-    sourceFrameCount,
-  ]);
-
-  const canConvert = !!selectedFile && !isConverting && (isReady || (inputType === 'mp4' && outputType === 'webm'));
+  const batchStatusLabel: Record<string, string> = {
+    waiting: 'waiting', converting: 'converting…', done: 'done', error: 'error',
+  };
 
   return (
     <div className="card">
-      <div style={{ display: 'none' }}>
-        <video ref={previewVideoRef} preload="metadata" playsInline />
-      </div>
-
       <div className="status-row">
         <div className={`status-dot ${isReady ? 'status-dot--ready' : 'status-dot--loading'}`} />
         <span className="status-text">
           {isReady ? 'FFmpeg ready' : isLoadingEngine ? 'Loading FFmpeg…' : 'FFmpeg unavailable'}
         </span>
-        {engineUsed && !isConverting && (
-          <span className="engine-badge">
-            {engineUsed === 'webcodecs' ? '⚡ WebCodecs' : engineUsed === 'mediarecorder' ? 'MediaRecorder' : 'FFmpeg'}
-          </span>
-        )}
       </div>
 
       <div className="format-row">
         <div>
           <label className="label">From</label>
           <select className="select" value={inputType} onChange={handleInputTypeChange}
-            disabled={isLoadingEngine || isConverting}>
+            disabled={isLoadingEngine || batchConverting}>
             {videoFormats.map(f => <option key={f} value={f}>{f.toUpperCase()}</option>)}
           </select>
         </div>
@@ -1838,77 +1275,94 @@ export const VideoConverter: React.FC = () => {
         <div>
           <label className="label">To</label>
           <select className="select" value={outputType} onChange={handleOutputTypeChange}
-            disabled={isLoadingEngine || isConverting}>
+            disabled={isLoadingEngine || batchConverting}>
             {videoFormats.map(f => <option key={f} value={f}>{f.toUpperCase()}</option>)}
           </select>
         </div>
       </div>
 
       <div>
-        <label className="label">File</label>
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="file-input"
-          accept={FORMATS[inputType].accept}
-          onChange={handleFileChange}
-          disabled={isLoadingEngine || isConverting}
+        <label className="label">Add files</label>
+        <DropZone
+          accept={Object.values(FORMATS).map(f => f.accept).join(',')}
+          multiple
+          disabled={isLoadingEngine || batchConverting}
+          hint="MP4, WebM, AVI, MOV, MKV"
+          onFiles={files => {
+            const newFiles: VideoBatchFile[] = files.map(f => {
+              const ext = (f.name.split('.').pop()?.toLowerCase() ?? 'mp4') as VideoFormat;
+              const inFmt = (Object.keys(FORMATS) as VideoFormat[]).includes(ext) ? ext : 'mp4';
+              return {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                file: f, inFmt, status: 'waiting', progress: 0,
+                resultUrl: null, resultSize: null, error: null,
+              };
+            });
+            setBatchFiles(prev => [...prev, ...newFiles]);
+          }}
         />
       </div>
 
-      {selectedFile && !isConverting && !resultUrl && (
-        <div className="file-info">
-          <span>{selectedFile.name}</span>
-          <span className="file-info-sep">·</span>
-          <span>{formatBytes(selectedFile.size)}</span>
-          {sourceDurationSec !== null && <>
-            <span className="file-info-sep">·</span>
-            <span>{formatDuration(sourceDurationSec)}</span>
-          </>}
-          {sourceFps !== null && <>
-            <span className="file-info-sep">·</span>
-            <span>{sourceFps.toFixed(0)} fps</span>
-          </>}
+      {batchFiles.length > 0 && (
+        <div className="batch-file-list">
+          {batchFiles.map(f => (
+            <div key={f.id} className={`batch-file-item batch-file-item--${f.status}`}>
+              <div className="batch-file-name" title={f.file.name}>{f.file.name}</div>
+              <div className="batch-file-size">{formatBytes(f.file.size)}</div>
+              {f.status === 'converting' && (
+                <div className="batch-file-progress">
+                  <div className="batch-file-progress-fill" style={{ width: `${f.progress}%` }} />
+                </div>
+              )}
+              {f.status === 'done' && f.resultSize !== null && (
+                <div className="batch-file-size" style={{ color: '#16A34A' }}>
+                  → {formatBytes(f.resultSize)}
+                </div>
+              )}
+              <div className={`batch-file-status batch-file-status--${f.status}`}>
+                {f.status === 'error' ? f.error?.slice(0, 20) ?? 'error' : batchStatusLabel[f.status]}
+              </div>
+              {f.resultUrl && (
+                <button
+                  className="batch-download-btn"
+                  style={{ padding: '4px 10px', fontSize: '11px' }}
+                  onClick={() => triggerDownload(f.resultUrl!, `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType}`)}>
+                  ↓
+                </button>
+              )}
+              {!batchConverting && (
+                <button onClick={() => removeBatchFile(f.id)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BBBBBB', fontSize: '14px', padding: '0 2px' }}>
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <button className="btn-primary" onClick={convertFile} disabled={!canConvert}>
-          {isConverting
-            ? `Converting… ${progress}%`
-            : isLoadingEngine && !(inputType === 'mp4' && outputType === 'webm')
-              ? 'Loading FFmpeg…'
-              : 'Convert'}
-        </button>
-        <button className="btn-ghost" onClick={clearAll} disabled={isConverting}>
-          Reset
-        </button>
-      </div>
-
-      {(isConverting || progress > 0) && (
-        <div className="progress-wrap">
-          <div className="progress-fill" style={{ width: `${progress}%` }} />
+      {batchFiles.length > 0 && (
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button className="btn-primary" style={{ flex: 1 }}
+            onClick={convertBatchAll}
+            disabled={batchConverting || (!isReady && !(inputType === 'mp4' && outputType === 'webm')) || batchPendingCount === 0}>
+            {batchConverting
+              ? `Converting ${batchFilesRef.current.filter(f => f.status === 'done').length + 1} of ${batchFilesRef.current.length}…`
+              : `Convert ${batchPendingCount} file${batchPendingCount !== 1 ? 's' : ''}`}
+          </button>
+          {batchDoneCount > 0 && (
+            <button className="batch-download-btn" onClick={downloadBatchAll}>
+              ↓ All ({batchDoneCount})
+            </button>
+          )}
+          <button className="btn-ghost" onClick={clearBatch} disabled={batchConverting}>Clear</button>
         </div>
       )}
 
-      {error && <div className="badge badge--error">{error}</div>}
-
-      {resultUrl && (
-        <div className="result-section">
-          <div className="badge badge--success">
-            Done{resultSize !== null ? ` — ${formatBytes(resultSize)}` : ''}{conversionTimeMs !== null ? ` · ${formatMs(conversionTimeMs)}` : ''}
-          </div>
-          <video controls className="result-video">
-            <source src={resultUrl} type={FORMATS[outputType].mimeType} />
-          </video>
-          <div className="btn-row">
-            <a href={resultUrl} download={`converted-${Date.now()}.${outputType}`}
-              className="btn-download-link">
-              Download
-            </a>
-            <button onClick={clearAll} className="btn-ghost">Convert another</button>
-          </div>
-        </div>
+      {batchFiles.length === 0 && (
+        <p style={{ margin: 0, fontSize: '13px', color: '#BBBBBB', textAlign: 'center', padding: '8px 0' }}>
+          Add files above to get started
+        </p>
       )}
     </div>
   );

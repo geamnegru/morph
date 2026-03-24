@@ -468,3 +468,81 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+
+/* ─── Progress pulse (FFmpeg active, progress unknown) ───────────────────────── */
+@keyframes progress-pulse {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+.progress-fill--pulse {
+  animation: progress-pulse 1.2s ease-in-out infinite;
+  width: 100% !important;
+  background: linear-gradient(90deg, #7C3AED, #9B6DFF, #C4B5FD);
+}
+/* ─── Drag & drop ────────────────────────────────────────────────────────────── */
+.drop-zone {
+  width: 100%;
+  padding: 20px 14px;
+  border-radius: 12px;
+  border: 1.5px dashed #9B6DFF;
+  font-size: 14px;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  color: #888888;
+  background: #F3EEFF;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  text-align: center;
+  user-select: none;
+  position: relative;
+}
+
+.drop-zone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
+.drop-zone--active {
+  border-color: #7C3AED;
+  background: #EDE9FF;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+  color: #7C3AED;
+}
+
+.drop-zone:hover:not(.drop-zone--disabled) {
+  border-color: #7C3AED;
+  background: #EDE9FF;
+}
+
+.drop-zone--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.drop-zone--disabled input[type="file"] {
+  pointer-events: none;
+}
+
+.drop-zone-icon {
+  font-size: 20px;
+  margin-bottom: 6px;
+  display: block;
+}
+
+.drop-zone-text {
+  display: block;
+  font-size: 13px;
+  color: inherit;
+}
+
+.drop-zone-hint {
+  display: block;
+  font-size: 11px;
+  color: #BBBBBB;
+  margin-top: 3px;
+}
