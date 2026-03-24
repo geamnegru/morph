@@ -1101,7 +1101,7 @@ export const VideoConverter: React.FC = () => {
       await ffmpeg.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-        workerURL: `${baseURL}/ffmpeg-core.worker.js`,
+        classWorkerURL: '/ffmpeg/worker.js',
       });
 
       if (!cancelled) {
