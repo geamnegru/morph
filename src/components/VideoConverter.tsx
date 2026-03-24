@@ -1090,12 +1090,10 @@ export const VideoConverter: React.FC = () => {
       try {
         const ffmpeg = new FFmpeg();
         ffmpeg.on('log', ({ message }) => { console.log('[FFmpeg]', message); });
-        const { toBlobURL } = await import('@ffmpeg/util');
-        const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm';
         await ffmpeg.load({
-          coreURL:   await toBlobURL(`${baseURL}/ffmpeg-core.js`,        'text/javascript'),
-          wasmURL:   await toBlobURL(`${baseURL}/ffmpeg-core.wasm`,      'application/wasm'),
-          workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+          coreURL: '/ffmpeg/ffmpeg-core.js',
+          wasmURL: '/ffmpeg/ffmpeg-core.wasm',
+          workerURL: '/ffmpeg/ffmpeg-core.worker.js',
         });
         ffmpegRef.current = ffmpeg;
         setIsReady(true);
