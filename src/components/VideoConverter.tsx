@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Muxer, ArrayBufferTarget } from 'webm-muxer';
 import * as MP4Box from 'mp4box';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { toBlobURL } from '@ffmpeg/util';
 import { DropZone } from './DropZone';
 import type {
   VideoFormat,
@@ -13,7 +14,6 @@ import type {
   EncodedChunkRecord,
 } from '../types';
 import { FORMATS, COPY_COMPATIBLE_FORMATS } from '../constants';
-
 
 async function getWebCodecsRuntime(args: {
   width: number;
@@ -1086,26 +1086,46 @@ export const VideoConverter: React.FC = () => {
   const videoFormats = useMemo(() => Object.keys(FORMATS) as VideoFormat[], []);
 
   useEffect(() => {
-    const initFFmpeg = async () => {
-      try {
-        const ffmpeg = new FFmpeg();
-        ffmpeg.on('log', ({ message }) => { console.log('[FFmpeg]', message); });
-        await ffmpeg.load({
-          coreURL: '/ffmpeg/ffmpeg-core.js',
-          wasmURL: '/ffmpeg/ffmpeg-core.wasm',
-          workerURL: '/ffmpeg/ffmpeg-core.worker.js',
-        });
+  let cancelled = false;
+
+  const initFFmpeg = async () => {
+    try {
+      const ffmpeg = new FFmpeg();
+
+      ffmpeg.on('log', ({ message }) => {
+        console.log('[FFmpeg]', message);
+      });
+
+      const baseURL = '/ffmpeg';
+
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+      });
+
+      if (!cancelled) {
         ffmpegRef.current = ffmpeg;
         setIsReady(true);
-      } catch (err) {
-        console.error('[FFmpeg load failed]', err);
-      } finally {
+      }
+    } catch (err) {
+      console.error('[FFmpeg load failed]', err);
+      if (!cancelled) {
+        setIsReady(false);
+      }
+    } finally {
+      if (!cancelled) {
         setIsLoadingEngine(false);
       }
-    };
+    }
+  };
 
-    void initFFmpeg();
-  }, []);
+  void initFFmpeg();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
 
   const handleInputTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const nextType = e.target.value as VideoFormat;
