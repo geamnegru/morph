@@ -1,58 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
-import type { ImageFormat } from '../types';
-import { imageOutputFormats } from '../constants';
+import type { ImageBatchFile, ImageFormat } from '../types';
+import { EMPTY_BATCH_MESSAGE, IMAGE_DROPZONE_ACCEPT, IMAGE_DROPZONE_HINT, imageOutputFormats, MIME_MAP, QUALITY_MAP } from '../constants';
+import { createBatchFileId, formatBytes, triggerDownload } from '../utils/fileUtils';
 import { DropZone } from './DropZone';
 import { WorkerPool } from '../workers/workerPool';
 
-const formatBytes = (b: number) => {
-  if (b === 0) return '0 B';
-  const u = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(b) / Math.log(1024));
-  return `${(b / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
-};
-
 const WORKER_POOL_SIZE = 4;
-
-const MIME_MAP: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  webp: 'image/webp',
-  avif: 'image/avif',
-};
-const QUALITY_MAP: Record<string, number> = {
-  png: 1,
-  jpg: 0.88,
-  webp: 0.90,
-  avif: 0.85,
-};
-
-type FileStatus = 'waiting' | 'converting' | 'done' | 'error';
-
-interface BatchFile {
-  id: string;
-  file: File;
-  status: FileStatus;
-  progress: number;
-  resultUrl: string | null;
-  resultSize: number | null;
-  error: string | null;
-}
-
-const triggerDownload = (url: string, filename: string) => {
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-};
-
 export const ImageConverter = () => {
   const [outputType, setOutputType] = useState<ImageFormat>(imageOutputFormats[2]);
   const [converting, setConverting] = useState(false);
-  const [files, setFiles] = useState<BatchFile[]>([]);
+  const [files, setFiles] = useState<ImageBatchFile[]>([]);
   const poolRef = useRef<WorkerPool | null>(null);
 
   useEffect(() => {
@@ -63,11 +21,15 @@ export const ImageConverter = () => {
     return () => { poolRef.current?.terminate(); };
   }, []);
 
-  const updateFile = useCallback((id: string, patch: Partial<BatchFile>) => {
+  const updateFile = useCallback((id: string, patch: Partial<ImageBatchFile>) => {
     setFiles(prev => prev.map(f => f.id === id ? { ...f, ...patch } : f));
   }, []);
 
-  const convertSingle = async (bf: BatchFile, outFmt: ImageFormat): Promise<void> => {
+  const getErrorMessage = (error: unknown) => {
+    return error instanceof Error ? error.message : 'Failed';
+  };
+
+  const convertSingle = async (bf: ImageBatchFile, outFmt: ImageFormat): Promise<void> => {
     if (!poolRef.current) return;
     updateFile(bf.id, { status: 'converting', progress: 10 });
     try {
@@ -80,8 +42,8 @@ export const ImageConverter = () => {
       );
       const url = URL.createObjectURL(resultBlob);
       updateFile(bf.id, { status: 'done', progress: 100, resultUrl: url, resultSize });
-    } catch (e: any) {
-      updateFile(bf.id, { status: 'error', progress: 0, error: e?.message ?? 'Failed' });
+    } catch (error: unknown) {
+      updateFile(bf.id, { status: 'error', progress: 0, error: getErrorMessage(error) });
     }
   };
 
@@ -118,8 +80,8 @@ export const ImageConverter = () => {
   };
 
   const addFiles = useCallback((incoming: File[]) => {
-    const newFiles: BatchFile[] = incoming.map(f => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    const newFiles: ImageBatchFile[] = incoming.map(f => ({
+      id: createBatchFileId(),
       file: f, status: 'waiting', progress: 0,
       resultUrl: null, resultSize: null, error: null,
     }));
@@ -146,9 +108,9 @@ export const ImageConverter = () => {
       <div>
         <label className="label">Add files</label>
         <DropZone
-          accept=".png,.jpg,.jpeg,.webp,.avif,.gif,.bmp,.tiff"
+          accept={IMAGE_DROPZONE_ACCEPT}
           multiple disabled={converting}
-          hint="PNG, JPG, WebP, AVIF, GIF, BMP, TIFF"
+          hint={IMAGE_DROPZONE_HINT}
           onFiles={addFiles}
         />
       </div>
@@ -166,7 +128,7 @@ export const ImageConverter = () => {
               )}
               {f.status === 'done' && f.resultSize !== null && (
                 <div className="batch-file-size" style={{ color: '#16A34A' }}>
-                  → {formatBytes(f.resultSize)}
+                  {'->'} {formatBytes(f.resultSize)}
                 </div>
               )}
               <div className={`batch-file-status batch-file-status--${f.status}`}>
@@ -177,13 +139,13 @@ export const ImageConverter = () => {
                   className="batch-download-btn"
                   style={{ padding: '4px 10px', fontSize: '11px' }}
                   onClick={() => triggerDownload(f.resultUrl!, `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType.ext}`)}>
-                  ↓
+                  Save
                 </button>
               )}
               {!converting && (
                 <button onClick={() => removeFile(f.id)}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BBBBBB', fontSize: '14px', padding: '0 2px' }}>
-                  ×
+                  x
                 </button>
               )}
             </div>
@@ -196,12 +158,12 @@ export const ImageConverter = () => {
           <button className="btn-primary" style={{ flex: 1 }}
             onClick={convertAll} disabled={converting || pendingCount === 0}>
             {converting
-              ? `Converting… (${doneCount}/${doneCount + pendingCount})`
+              ? `Converting... (${doneCount}/${doneCount + pendingCount})`
               : `Convert ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`}
           </button>
           {doneCount > 0 && (
             <button className="batch-download-btn" onClick={downloadAll}>
-              ↓ All ({doneCount})
+              Save all ({doneCount})
             </button>
           )}
           <button className="btn-ghost" onClick={clearAll} disabled={converting}>Clear</button>
@@ -210,7 +172,7 @@ export const ImageConverter = () => {
 
       {files.length === 0 && (
         <p style={{ margin: 0, fontSize: '13px', color: '#BBBBBB', textAlign: 'center', padding: '8px 0' }}>
-          Add files above to get started
+          {EMPTY_BATCH_MESSAGE}
         </p>
       )}
     </div>

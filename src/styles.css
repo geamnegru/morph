@@ -546,3 +546,190 @@ body {
   color: #BBBBBB;
   margin-top: 3px;
 }
+
+/* Batch conversion */
+.batch-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.batch-file-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  padding: 14px 16px;
+  border: 1.5px solid #EBEBEB;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 247, 255, 0.98));
+  box-shadow: 0 10px 24px rgba(17, 17, 17, 0.04);
+}
+
+.batch-file-item--done {
+  border-color: #BBF7D0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(240, 253, 244, 0.98));
+}
+
+.batch-file-item--error {
+  border-color: #FECACA;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(254, 242, 242, 0.98));
+}
+
+.batch-file-item--converting {
+  border-color: #DDD6FE;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 238, 255, 0.98));
+}
+
+.batch-file-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #111111;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-file-size {
+  font-size: 12px;
+  color: #777777;
+}
+
+.batch-file-item--done .batch-file-size:last-of-type {
+  color: #15803D;
+  font-weight: 700;
+}
+
+.batch-file-progress {
+  flex: 1 1 100%;
+  height: 8px;
+  border-radius: 9999px;
+  background: rgba(124, 58, 237, 0.1);
+  overflow: hidden;
+}
+
+.batch-file-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #7C3AED, #9B6DFF);
+  box-shadow: 0 0 14px rgba(124, 58, 237, 0.24);
+  transition: width 0.2s ease;
+}
+
+.batch-file-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 6px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.batch-file-status--waiting {
+  color: #6B7280;
+  background: #F3F4F6;
+}
+
+.batch-file-status--converting {
+  color: #6D28D9;
+  background: #F3E8FF;
+}
+
+.batch-file-status--done {
+  color: #166534;
+  background: #DCFCE7;
+}
+
+.batch-file-status--error {
+  color: #B91C1C;
+  background: #FEE2E2;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
+.batch-download-btn {
+  margin-left: auto;
+  min-width: 92px;
+  padding: 9px 14px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #111827, #374151);
+  color: #FFFFFF;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.12s ease, opacity 0.15s ease;
+}
+
+.batch-download-btn:hover {
+  opacity: 0.92;
+}
+
+.batch-download-btn:active {
+  transform: scale(0.98);
+}
+
+.batch-file-item > button:last-child {
+  border: none;
+  background: transparent;
+  color: #9CA3AF;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 2px;
+  cursor: pointer;
+  transition: color 0.15s ease, transform 0.12s ease;
+}
+
+.batch-file-item > button:last-child:hover {
+  color: #111111;
+  transform: scale(1.05);
+}
+
+.batch-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.batch-primary-action {
+  flex: 1 1 260px;
+}
+
+.batch-empty-state {
+  margin: 0;
+  padding: 12px 0 4px;
+  text-align: center;
+  font-size: 13px;
+  color: #A1A1AA;
+}
+
+@media (max-width: 640px) {
+  .batch-file-item {
+    padding: 12px 14px;
+  }
+
+  .batch-download-btn {
+    margin-left: 0;
+  }
+
+  .batch-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .batch-primary-action {
+    flex: 1 1 auto;
+  }
+}

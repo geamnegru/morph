@@ -1,34 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
-import type { TextFormat } from '../types';
-import { textInputFormats, textOutputFormats } from '../constants';
+import type { TextBatchFile, TextFormat } from '../types';
+import { EMPTY_BATCH_MESSAGE, textInputFormats, textOutputFormats } from '../constants';
+import { createBatchFileId, formatBytes, triggerDownload } from '../utils/fileUtils';
 import { DropZone } from './DropZone';
-
-const formatBytes = (b: number) => {
-  if (b === 0) return '0 B';
-  const u = ['B', 'KB', 'MB'];
-  const i = Math.floor(Math.log(b) / Math.log(1024));
-  return `${(b / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
-};
-
-const triggerDownload = (url: string, filename: string) => {
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.style.display = 'none';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-};
-
-type FileStatus = 'waiting' | 'converting' | 'done' | 'error';
-
-interface BatchFile {
-  id: string; file: File; status: FileStatus;
-  resultUrl: string | null; resultSize: number | null; error: string | null;
-}
 
 export const TextConverter = () => {
   const [inputType,  setInputType]  = useState<TextFormat>(textInputFormats[0]);
   const [outputType, setOutputType] = useState<TextFormat>(textOutputFormats[1]);
   const [converting, setConverting] = useState(false);
-  const [files, setFiles] = useState<BatchFile[]>([]);
+  const [files, setFiles] = useState<TextBatchFile[]>([]);
   const workerRef = useRef<Worker | null>(null);
   // Map id → { resolve, reject } pentru promise-uri în așteptare
   const pendingRef = useRef<Map<string, { resolve: (v: { buf: ArrayBuffer; outMime: string }) => void; reject: (e: Error) => void }>>(new Map());
@@ -49,11 +30,15 @@ export const TextConverter = () => {
     return () => worker.terminate();
   }, []);
 
-  const updateFile = useCallback((id: string, patch: Partial<BatchFile>) => {
+  const updateFile = useCallback((id: string, patch: Partial<TextBatchFile>) => {
     setFiles(prev => prev.map(f => f.id === id ? { ...f, ...patch } : f));
   }, []);
 
-  const convertSingle = async (bf: BatchFile, inFmt: TextFormat, outFmt: TextFormat) => {
+  const getErrorMessage = (error: unknown) => {
+    return error instanceof Error ? error.message : 'Failed';
+  };
+
+  const convertSingle = async (bf: TextBatchFile, inFmt: TextFormat, outFmt: TextFormat) => {
     if (!workerRef.current) return;
     updateFile(bf.id, { status: 'converting' });
     try {
@@ -64,8 +49,8 @@ export const TextConverter = () => {
       });
       const blob = new Blob([buf], { type: outMime });
       updateFile(bf.id, { status: 'done', resultUrl: URL.createObjectURL(blob), resultSize: blob.size });
-    } catch (e: any) {
-      updateFile(bf.id, { status: 'error', error: e?.message ?? 'Failed' });
+    } catch (error: unknown) {
+      updateFile(bf.id, { status: 'error', error: getErrorMessage(error) });
     }
   };
 
@@ -101,8 +86,8 @@ export const TextConverter = () => {
   };
 
   const addFiles = useCallback((incoming: File[]) => {
-    const newFiles: BatchFile[] = incoming.map(f => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    const newFiles: TextBatchFile[] = incoming.map(f => ({
+      id: createBatchFileId(),
       file: f, status: 'waiting', resultUrl: null, resultSize: null, error: null,
     }));
     setFiles(prev => [...prev, ...newFiles]);
@@ -123,7 +108,7 @@ export const TextConverter = () => {
             {textInputFormats.map(f => <option key={f.id} value={f.id}>{f.name.toUpperCase()}</option>)}
           </select>
         </div>
-        <div className="format-arrow">→</div>
+        <div className="format-arrow">{'->'}</div>
         <div>
           <label className="label">To</label>
           <select className="select" value={outputType.id}
@@ -153,7 +138,7 @@ export const TextConverter = () => {
               <div className="batch-file-size">{formatBytes(f.file.size)}</div>
               {f.status === 'done' && f.resultSize !== null && (
                 <div className="batch-file-size" style={{ color: '#16A34A' }}>
-                  → {formatBytes(f.resultSize)}
+                  {'->'} {formatBytes(f.resultSize)}
                 </div>
               )}
               <div className={`batch-file-status batch-file-status--${f.status}`}>
@@ -163,13 +148,13 @@ export const TextConverter = () => {
                 <button className="batch-download-btn"
                   style={{ padding: '4px 10px', fontSize: '11px' }}
                   onClick={() => triggerDownload(f.resultUrl!, `${f.file.name.replace(/\.[^.]+$/, '')}.${outputType.ext}`)}>
-                  ↓
+                  Save
                 </button>
               )}
               {!converting && (
                 <button onClick={() => removeFile(f.id)}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BBBBBB', fontSize: '14px', padding: '0 2px' }}>
-                  ×
+                  x
                 </button>
               )}
             </div>
@@ -181,11 +166,11 @@ export const TextConverter = () => {
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button className="btn-primary" style={{ flex: 1 }}
             onClick={convertAll} disabled={converting || pendingCount === 0}>
-            {converting ? 'Converting…' : `Convert ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`}
+            {converting ? 'Converting...' : `Convert ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`}
           </button>
           {doneCount > 0 && (
             <button className="batch-download-btn" onClick={downloadAll}>
-              ↓ All ({doneCount})
+              Save all ({doneCount})
             </button>
           )}
           <button className="btn-ghost" onClick={clearAll} disabled={converting}>Clear</button>
@@ -194,7 +179,7 @@ export const TextConverter = () => {
 
       {files.length === 0 && (
         <p style={{ margin: 0, fontSize: '13px', color: '#BBBBBB', textAlign: 'center', padding: '8px 0' }}>
-          Add files above to get started
+          {EMPTY_BATCH_MESSAGE}
         </p>
       )}
     </div>

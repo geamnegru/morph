@@ -104,7 +104,7 @@ self.onmessage = async ({ data: { id, type, data: _data }, }) => {
     let data;
     try {
         if (type !== FFMessageType.LOAD && !ffmpeg)
-            throw ERROR_NOT_LOADED; // eslint-disable-line
+            throw ERROR_NOT_LOADED;
         switch (type) {
             case FFMessageType.LOAD:
                 data = await load(_data);

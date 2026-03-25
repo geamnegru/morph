@@ -1,20 +1,11 @@
 import React, { useState, useRef, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile } from '@ffmpeg/util';
-import type { AudioFormat } from '../types';
-import { audioOutputFormats } from '../constants';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import type { AudioBatchFile, AudioFormat } from '../types';
+import { AUDIO_DROPZONE_ACCEPT, AUDIO_DROPZONE_HINT, EMPTY_BATCH_MESSAGE, audioOutputFormats, FFMPEG_FORMAT, AUDIO_MIME } from '../constants';
+import { createBatchFileId, formatBytes } from '../utils/fileUtils';
 import { DropZone } from './DropZone';
-
-const FFMPEG_FORMAT: Record<string, string> = {
-  mp3: 'mp3', aac: 'mp4', ogg: 'ogg', wav: 'wav',
-};
-
-const AUDIO_MIME: Record<string, string> = {
-  mp3: 'audio/mpeg', aac: 'audio/mp4',
-  ogg: 'audio/ogg; codecs=vorbis',
-  wav: 'audio/wav', opus: 'audio/webm; codecs=opus',
-};
 
 const getOpusMimeType = (): string | null => {
   for (const mime of ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm']) {
@@ -23,43 +14,21 @@ const getOpusMimeType = (): string | null => {
   return null;
 };
 
-const formatBytes = (b: number) => {
-  if (b === 0) return '0 B';
-  const u = ['B','KB','MB','GB'];
-  const i = Math.floor(Math.log(b) / Math.log(1024));
-  return `${(b / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
-};
-
-type FileStatus = 'waiting' | 'converting' | 'done' | 'error';
-
-interface BatchFile {
-  id: string;
-  file: File;
-  status: FileStatus;
-  progress: number;
-  resultUrl: string | null;
-  resultSize: number | null;
-  error: string | null;
-  outputExt: string;
-}
-
 export const AudioConverter = () => {
   const [ready, setReady] = useState(false);
   const [outputType, setOutputType] = useState<AudioFormat>(audioOutputFormats[0]);
   const [converting, setConverting] = useState(false);
-  const [files, setFiles] = useState<BatchFile[]>([]);
+  const [files, setFiles] = useState<AudioBatchFile[]>([]);
 
   const ffmpegRef = useRef<FFmpeg | null>(null);
 
   const loadFFmpeg = async () => {
-    const { FFmpeg } = await import('@ffmpeg/ffmpeg');
-    const { toBlobURL } = await import('@ffmpeg/util');
     const ffmpeg = new FFmpeg();
-    const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm';
+    const baseURL = '/ffmpeg';
     await ffmpeg.load({
-      coreURL:   await toBlobURL(`${baseURL}/ffmpeg-core.js`,        'text/javascript'),
-      wasmURL:   await toBlobURL(`${baseURL}/ffmpeg-core.wasm`,      'application/wasm'),
-      workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      classWorkerURL: '/ffmpeg/worker.js',
     });
     ffmpegRef.current = ffmpeg;
     setReady(true);
@@ -67,9 +36,13 @@ export const AudioConverter = () => {
 
   React.useEffect(() => { loadFFmpeg(); }, []);
 
-  const updateFile = useCallback((id: string, patch: Partial<BatchFile>) => {
+  const updateFile = useCallback((id: string, patch: Partial<AudioBatchFile>) => {
     setFiles(prev => prev.map(f => f.id === id ? { ...f, ...patch } : f));
   }, []);
+
+  const getErrorMessage = (error: unknown) => {
+    return error instanceof Error ? error.message : 'Failed';
+  };
 
   const convertWithMediaRecorder = async (
     file: File,
@@ -115,7 +88,12 @@ export const AudioConverter = () => {
       recorder.onstop = () => {
         streamCtx.close();
         const blob = new Blob(chunks, { type: opusMime });
-        blob.size === 0 ? reject(new Error('Empty output')) : resolve(blob);
+        if (blob.size === 0) {
+          reject(new Error('Empty output'));
+          return;
+        }
+
+        resolve(blob);
       };
       recorder.onerror = e => { streamCtx.close(); reject(new Error(`${e}`)); };
       recorder.start(100);
@@ -143,8 +121,12 @@ export const AudioConverter = () => {
       await ffmpegRef.current.writeFile(inputName, await fetchFile(file));
       const args = ['-i', inputName, '-vn', '-map_metadata', '-1', '-c:a', outFmt.ffmpegCodec];
       if (outFmt.sampleRate) args.push('-ar', String(outFmt.sampleRate));
-      if (outFmt.id !== 'wav') args.push('-b:a', '128k');
-      args.push('-ac', '2');
+      if (outFmt.id === 'amr') {
+        args.push('-ac', '1', '-b:a', '12.2k');
+      } else {
+        if (outFmt.id !== 'wav' && outFmt.id !== 'alac' && outFmt.id !== 'aifc') args.push('-b:a', '128k');
+        args.push('-ac', '2');
+      }
       const fmt = FFMPEG_FORMAT[outFmt.id];
       if (fmt) args.push('-f', fmt);
       args.push('-y', outputName);
@@ -156,12 +138,12 @@ export const AudioConverter = () => {
       if (blob.size === 0) throw new Error('Output is empty.');
       return blob;
     } finally {
-      try { await ffmpegRef.current?.deleteFile(inputName); } catch {}
-      try { await ffmpegRef.current?.deleteFile(outputName); } catch {}
+      try { await ffmpegRef.current?.deleteFile(inputName); } catch { /* ignore cleanup errors */ }
+      try { await ffmpegRef.current?.deleteFile(outputName); } catch { /* ignore cleanup errors */ }
     }
   };
 
-  const convertSingle = async (bf: BatchFile, outFmt: AudioFormat) => {
+  const convertSingle = async (bf: AudioBatchFile, outFmt: AudioFormat) => {
     updateFile(bf.id, { status: 'converting', progress: 0 });
     try {
       const inExt = bf.file.name.split('.').pop()?.toLowerCase() ?? 'mp3';
@@ -173,8 +155,8 @@ export const AudioConverter = () => {
       }
       const url = URL.createObjectURL(blob);
       updateFile(bf.id, { status: 'done', progress: 100, resultUrl: url, resultSize: blob.size });
-    } catch (e: any) {
-      updateFile(bf.id, { status: 'error', error: e?.message ?? 'Failed' });
+    } catch (error: unknown) {
+      updateFile(bf.id, { status: 'error', error: getErrorMessage(error) });
     }
   };
   const convertAll = async () => {
@@ -214,15 +196,15 @@ export const AudioConverter = () => {
   const doneCount = files.filter(f => f.status === 'done').length;
   const pendingCount = files.filter(f => f.status === 'waiting' || f.status === 'error').length;
 
-  const statusLabel: Record<FileStatus, string> = {
-    waiting: 'waiting', converting: 'converting…', done: 'done', error: 'error',
+  const statusLabel: Record<AudioBatchFile['status'], string> = {
+    waiting: 'waiting', converting: 'converting...', done: 'done', error: 'error',
   };
 
   return (
     <div className="card">
       <div className="status-row">
         <div className={`status-dot ${ready ? 'status-dot--ready' : 'status-dot--loading'}`} />
-        <span className="status-text">{ready ? 'FFmpeg ready' : 'Loading FFmpeg…'}</span>
+        <span className="status-text">{ready ? 'FFmpeg ready' : 'Loading FFmpeg...'}</span>
       </div>
 
       <div className="format-row">
@@ -240,12 +222,12 @@ export const AudioConverter = () => {
       <div>
         <label className="label">Add files</label>
         <DropZone
-          accept=".mp3,.wav,.m4a,.aac,.ogg,.opus,.flac,.aiff,.aif,.webm"
+          accept={AUDIO_DROPZONE_ACCEPT}
           multiple disabled={converting}
-          hint="MP3, WAV, AAC, OGG, FLAC, Opus, AIFF, WebM"
+          hint={AUDIO_DROPZONE_HINT}
           onFiles={files => {
-            const newFiles: BatchFile[] = files.map(f => ({
-              id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            const newFiles: AudioBatchFile[] = files.map(f => ({
+              id: createBatchFileId(),
               file: f, status: 'waiting', progress: 0,
               resultUrl: null, resultSize: null, error: null, outputExt: outputType.ext,
             }));
@@ -267,7 +249,7 @@ export const AudioConverter = () => {
               )}
               {f.status === 'done' && f.resultSize !== null && (
                 <div className="batch-file-size" style={{ color: '#16A34A' }}>
-                  → {formatBytes(f.resultSize)}
+                  {'->'} {formatBytes(f.resultSize)}
                 </div>
               )}
               <div className={`batch-file-status batch-file-status--${f.status}`}>
@@ -277,13 +259,13 @@ export const AudioConverter = () => {
                 <a href={f.resultUrl}
                   download={`${f.file.name.replace(/\.[^.]+$/, '')}.${outputType.ext}`}
                   className="batch-download-btn" style={{ padding: '4px 10px', fontSize: '11px' }}>
-                  ↓
+                  Save
                 </a>
               )}
               {!converting && (
                 <button onClick={() => removeFile(f.id)}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#BBBBBB', fontSize: '14px', padding: '0 2px' }}>
-                  ×
+                  x
                 </button>
               )}
             </div>
@@ -295,11 +277,11 @@ export const AudioConverter = () => {
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button className="btn-primary" style={{ flex: 1 }}
             onClick={convertAll} disabled={converting || !ready || pendingCount === 0}>
-            {converting ? 'Converting…' : `Convert ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`}
+            {converting ? 'Converting...' : `Convert ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`}
           </button>
           {doneCount > 0 && (
             <button className="batch-download-btn" onClick={downloadAll}>
-              ↓ All ({doneCount})
+              Save all ({doneCount})
             </button>
           )}
           <button className="btn-ghost" onClick={clearAll} disabled={converting}>Clear</button>
@@ -308,7 +290,7 @@ export const AudioConverter = () => {
 
       {files.length === 0 && (
         <p style={{ margin: 0, fontSize: '13px', color: '#BBBBBB', textAlign: 'center', padding: '8px 0' }}>
-          Add files above to get started
+          {EMPTY_BATCH_MESSAGE}
         </p>
       )}
     </div>

@@ -76,7 +76,7 @@ This isn't a privacy policy. It's an architectural fact.
 ### Text / Data
 | Input | Output |
 |-------|--------|
-| TXT, JSON, YAML, CSV | JSON, YAML, CSV, HTML, Base64, LOG |
+| TXT, JSON, YAML, CSV | MD |
 
 ---
 
@@ -112,12 +112,11 @@ npm run build
 npm run preview
 ```
 
-> **Note:** FFmpeg WASM requires specific HTTP headers to enable `SharedArrayBuffer`. Make sure your server sets:
+> **Note:** This app uses the single-threaded FFmpeg core from local static assets in `public/ffmpeg`, so it does not require cross-origin isolation. The current setup only sets:
 > ```
 > Cross-Origin-Opener-Policy: same-origin
-> Cross-Origin-Embedder-Policy: require-corp
 > ```
-> These are already configured in `vite.config.ts`.
+> This is already configured in `vite.config.ts` for local dev/preview and in `vercel.json` for production deployments.
 
 ---
 

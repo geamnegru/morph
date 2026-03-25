@@ -1,56 +1,75 @@
-import { useRef, useState, useCallback } from 'react';
-import type { DragEvent, ChangeEvent, ReactNode } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import type { ChangeEvent, DragEvent, ReactNode } from 'react';
 
 interface DropZoneProps {
   onFiles: (files: File[]) => void;
-  accept?: string;       // e.g. ".mp4,.webm"
+  accept?: string;
   multiple?: boolean;
   disabled?: boolean;
-  hint?: string;         // text sub "Drop files here"
-  children?: ReactNode;  // override complet al conținutului
+  hint?: string;
+  children?: ReactNode;
 }
 
 export const DropZone = ({
-  onFiles, accept, multiple = true, disabled = false, hint, children,
+  onFiles,
+  accept,
+  multiple = true,
+  disabled = false,
+  hint,
+  children,
 }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
 
-  const handleDragEnter = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current++;
-    if (e.dataTransfer.items.length > 0) setIsDragging(true);
+  const handleDragEnter = useCallback((event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounter.current += 1;
+
+    if (event.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
   }, []);
 
-  const handleDragLeave = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current--;
-    if (dragCounter.current === 0) setIsDragging(false);
+  const handleDragLeave = useCallback((event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounter.current -= 1;
+
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
   }, []);
 
-  const handleDragOver = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDragOver = useCallback((event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
   }, []);
 
-  const handleDrop = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDrop = useCallback((event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     setIsDragging(false);
     dragCounter.current = 0;
-    if (disabled) return;
-    const dropped = Array.from(e.dataTransfer.files);
-    if (dropped.length) onFiles(multiple ? dropped : [dropped[0]!]);
+
+    if (disabled) {
+      return;
+    }
+
+    const droppedFiles = Array.from(event.dataTransfer.files);
+    if (droppedFiles.length > 0) {
+      onFiles(multiple ? droppedFiles : [droppedFiles[0]!]);
+    }
   }, [disabled, multiple, onFiles]);
 
-  const handleChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const selected = Array.from(e.target.files ?? []);
-    if (selected.length) onFiles(selected);
-    // reset input value so same file can be re-added
-    e.target.value = '';
+  const handleChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    if (selectedFiles.length > 0) {
+      onFiles(selectedFiles);
+    }
+
+    event.target.value = '';
   }, [onFiles]);
 
   return (
@@ -75,7 +94,7 @@ export const DropZone = ({
       />
       {children ?? (
         <>
-          <span className="drop-zone-icon">{isDragging ? '📂' : '⊕'}</span>
+          <span className="drop-zone-icon">{isDragging ? '\u2193' : '+'}</span>
           <span className="drop-zone-text">
             {isDragging ? 'Drop to add' : 'Click or drag files here'}
           </span>

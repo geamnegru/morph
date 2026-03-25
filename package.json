@@ -14,15 +14,12 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@jsquash/avif": "^2.1.1",
-    "@vercel/speed-insights": "^2.0.0",
-    "@wetheredge/libavjs-webcodecs-polyfill": "^0.4.0",
-    "libav.js": "^6.8.8",
-    "libavjs-webcodecs-bridge": "^0.3.2",
-    "libavjs-webcodecs-polyfill": "^0.5.5",
-    "mediabunny": "^1.39.2",
+    "heic-decode": "^2.1.0",
+    "mediabunny": "^1.40.1",
     "mp4box": "^2.3.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "utif2": "^4.1.0",
     "webm-muxer": "^5.1.4"
   },
   "devDependencies": {
